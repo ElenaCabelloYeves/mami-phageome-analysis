@@ -1,6 +1,6 @@
 # MAMI phageome analysis pipeline
 
-This repository contains the complete pipeline used in the analysis of the infant-maternal virome in the MAMI cohort, as described in [Paper title].
+This repository contains the complete pipeline used in the analysis of the infant-maternal phageome in the MAMI cohort, as described in [Paper title].
 
 ### Pipeline overview:
 1. Quality control and trimming
