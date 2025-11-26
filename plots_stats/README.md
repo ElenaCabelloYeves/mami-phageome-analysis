@@ -1,8 +1,8 @@
 # Plots and Statistical Analysis (R)
 
-This folder contains all scripts and RMarkdown notebooks used for data visualization and statistical analysis of the MAMI virome dataset.
+This folder contains all scripts and RMarkdown notebooks used for data visualization and statistical analysis of the MAMI phageome dataset.
 
-These analyses are performed after the main virome processing pipeline (mapping, clustering, annotation) and are focused on the interpretation and presentation of results for publication.
+These analyses are performed after the main phageome processing pipeline (mapping, clustering, annotation) and are focused on the interpretation and presentation of results for publication.
 
 ## 🧪 Analyses performed
 
@@ -11,7 +11,7 @@ These analyses are performed after the main virome processing pipeline (mapping,
   - Beta diversity (Bray-Curtis, NMDS, PERMANOVA)
 
 - **Temporal dynamics**
-  - Longitudinal virome evolution across infant timepoints
+  - Longitudinal phageome evolution across infant timepoints
   - Comparisons between maternal, infant, and milk samples
 
 - **CPM-based abundance analysis**
@@ -20,10 +20,10 @@ These analyses are performed after the main virome processing pipeline (mapping,
 
 - **Core phageome analysis**
   - Shared and persistent vOTUs across individuals or timepoints
-  - Contribution of core vs. transient virome components
+  - Contribution of core vs. transient phageome components
 
 - **Taxonomy**
-  - Relative abundance of viral taxa (class, family)
+  - Relative abundance of phage taxa (class, family)
   - Custom color palettes (e.g., Wes Anderson)
 
 - **Phage-host interactions**
