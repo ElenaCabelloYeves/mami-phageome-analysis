@@ -1,0 +1,173 @@
+---
+title: "Phage bacteria ratios"
+output: html_document
+date: "2025-11-06"
+---
+
+```{r}
+## ---- Load the following libraries ----------------------
+library(tidyverse)
+library(readxl)
+library(stringr)
+library(scales)
+library(ggpattern)
+library(here)   # <<--- añadido
+
+## ---- Inputs --------------------------------------------
+bact_xlsx <- here("data", "mmc3.xlsx")
+phage_csv <- here("data", "FINAL_data_forplots_CPMs_RPMs_newmetadata.csv")
+
+## ---- Output directory ----------------------------------
+out_dir <- here("results", "figures", "phage_bacteria_ratio")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# ---- Palette of colors ----------------------------------
+custom_colors <- c(
+  "Streptococcus"    = "pink",
+  "Bacteroides"      = "mediumaquamarine",
+  "Escherichia"      = "gold",
+  "Faecalibacterium" = "#C499CC",
+  "Bifidobacterium"  = "#6FA3F7",
+  "Klebsiella"       = "#7B2CBF",
+  "Blautia"          = "#90DDF0",
+  "Gemmiger"         = "#FFAC81",
+  "Ruminococcus"     = "#FA6459",
+  "Pseudomonas"      = "#EEE2DF"
+)
+
+## ---- Load data from bacteria ----------------------------
+bact_raw <- read_excel(bact_xlsx)
+stopifnot("clade_name" %in% names(bact_raw))
+
+bact_num <- bact_raw %>%
+  mutate(across(-clade_name, ~ as.numeric(gsub(",", ".", as.character(.))))) 
+
+bact_long <- bact_num %>%
+  pivot_longer(-clade_name, names_to = "Sample", values_to = "percent") %>%
+  mutate(prop = percent / 100)
+
+extract_genus_tax <- function(x){
+  ifelse(str_detect(x, "g__"), str_replace(x, ".*g__", ""), NA_character_)
+}
+
+bact_genus <- bact_long %>%
+  mutate(Genus = extract_genus_tax(clade_name)) %>%
+  filter(!is.na(Genus)) %>%
+  group_by(Sample, Genus) %>%
+  summarise(Rel_abund_bact = sum(prop, na.rm = TRUE), .groups = "drop")
+
+## ---- Load data from phages ----------------------------
+phage_df <- read.csv(phage_csv, stringsAsFactors = FALSE)
+
+meta <- phage_df %>%
+  select(Sample, mother_infant, bodysite) %>%
+  distinct() %>%
+  mutate(Host = case_when(
+    mother_infant == "infant" ~ "Infant",
+    mother_infant == "mother" ~ "Mother",
+    TRUE ~ NA_character_
+  ))
+
+extract_host_genus <- function(x){
+  ifelse(!is.na(x) & str_detect(x, "g__"), str_replace(x, ".*g__", ""), NA_character_)
+}
+
+phage_genus <- phage_df %>%
+  mutate(Genus = extract_host_genus(Host.genus)) %>%
+  filter(!is.na(Genus)) %>%
+  group_by(Sample, Genus) %>%
+  summarise(CPM_genus = sum(CPM, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Sample) %>%
+  mutate(CPM_total = sum(CPM_genus, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(Rel_abund_phage = if_else(CPM_total > 0, CPM_genus / CPM_total, 0))
+
+## ---- Join bacteria and phage data (only stool) --------
+df_scatter <- bact_genus %>%
+  inner_join(phage_genus, by = c("Sample","Genus")) %>%
+  inner_join(meta, by = "Sample") %>%
+  filter(bodysite == "stool", !is.na(Host)) %>%
+  mutate(Host = factor(Host, levels = c("Infant","Mother")))
+
+## ---- Mean of relative abundances and ratio ------------
+df_summary <- df_scatter %>%
+  group_by(Host, Genus) %>%
+  summarise(
+    Rel_abund_bact  = mean(Rel_abund_bact,  na.rm = TRUE),
+    Rel_abund_phage = mean(Rel_abund_phage, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+eps <- 1e-6
+df_ratios <- df_summary %>%
+  mutate(
+    Genus_plot = Genus,
+    ratio      = Rel_abund_phage / (Rel_abund_bact + eps)
+  )
+
+# ---- log10 axis (to avoid seq.default error) -----------
+vals <- df_ratios$ratio[is.finite(df_ratios$ratio) & df_ratios$ratio > 0]
+if (length(vals) == 0) stop("No positive ratios to plot.")
+minp <- min(vals); maxp <- max(vals)
+if (minp == maxp) { minp <- minp / 3; maxp <- maxp * 3 }
+lb <- floor(log10(minp)); ub <- ceiling(log10(maxp))
+brks <- 10^(lb:ub)
+
+# ---- FINAL PLOT (mothers with stripes) -----------------
+p_ratio <- ggplot(df_ratios,
+  aes(x = Genus_plot, y = ratio, fill = Genus_plot, pattern = Host)) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "grey40") +
+  ggpattern::geom_col_pattern(
+    position = position_dodge(width = 0.7), width = 0.7,
+    colour = "black", linewidth = 0.25,
+    pattern_fill = "black", pattern_density = 0.5,
+    pattern_spacing = 0.06, pattern_key_scale_factor = 1.6
+  ) +
+  scale_y_continuous(
+    trans = "log10",
+    limits = c(minp, maxp),
+    breaks = brks,
+    minor_breaks = NULL,
+    labels = label_number(accuracy = 0.1),
+    expand = expansion(mult = c(0.02, 0.08))
+  ) +
+  scale_fill_manual(
+    values = custom_colors, drop = FALSE,
+    guide = guide_legend(title = "Genus",
+      override.aes = list(pattern = "none", colour = NA))
+  ) +
+  scale_pattern_manual(
+    values = c(Infant = "none", Mother = "stripe"),
+    guide = guide_legend(title = "Host")
+  ) +
+  labs(
+    title = "Phage-to-bacteria ratio per genus (stool)",
+    x = "Host genus",
+    y = "Phage/Bacteria ratio (log scale)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x      = element_text(angle = 45, hjust = 1),
+    legend.key.width = grid::unit(1, "cm"),
+    legend.key.height= grid::unit(0.7, "cm")
+  )
+
+print(p_ratio)
+
+## ---- Save plots ----------------------------------------
+ggsave(file.path(out_dir, "phage_bacteria_ratio_stool.png"),
+       plot = p_ratio, width = 11, height = 7, units = "in",
+       dpi = 600, bg = "white")
+
+ggsave(file.path(out_dir, "phage_bacteria_ratio_stool.pdf"),
+       plot = p_ratio, width = 11, height = 7, units = "in",
+       bg = "white")
+
+```
+
+
+
+
+
+
+
