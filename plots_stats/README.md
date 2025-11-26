@@ -2,7 +2,7 @@
 
 This folder contains all scripts and RMarkdown notebooks used for data visualization and statistical analysis of the MAMI phageome dataset.
 
-These analyses are performed after the main phageome processing pipeline (mapping, clustering, annotation) and are focused on the interpretation and presentation of results for publication.
+These analyses are performed after the main phageome processing workflow (mapping, clustering, annotation) and are focused on the interpretation and presentation of results for publication.
 
 ## 🧪 Analyses performed
 
