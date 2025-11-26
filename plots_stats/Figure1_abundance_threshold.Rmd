@@ -128,14 +128,14 @@ print(tabla_completa)
 
 
 ```{r}
-# Save table
+# ---- Save table ------------------------------------------------------------
 write.csv(
   tabla_completa,
   file = file.path(out_dir, "summary_core_vOTUs_by_timepoint.csv"),
   row.names = FALSE
 )
 
-# Save plot
+# ---- Save plot -------------------------------------------------------------
 ggsave(
   filename = file.path(out_dir, "UpSet_core85_transmission_final.png"),
   plot     = plot_core_transmission,
