@@ -1,0 +1,147 @@
+---
+title: "Threshold_abundance of total CPMs in infants"
+output: html_document
+date: "2025-11-26"
+---
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(here)
+
+# Define output dir inside the repository
+out_dir <- here("results", "Figure1")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# ---- Load the data --------------------------------------------------------
+phage_results <- here("data", "results_with_metadata.csv")
+
+# ---- Filter just infant samples -------------------------------------------
+phage_results_infant <- phage_results %>%
+  filter(mother_infant == "infant")
+
+# ---- Calculate accumulated abundances per vOTU -----------------------------
+abundance_vOTUs_infant <- phage_results_infant %>%
+  group_by(vOTUs) %>%
+  summarise(Total_CPM = sum(CPM, na.rm = TRUE)) %>%
+  filter(Total_CPM > 0) %>%  # Filter absent vOTUs
+  arrange(desc(Total_CPM)) %>%
+  mutate(
+    cumulative_CPM = cumsum(Total_CPM),
+    cumulative_percentage = cumulative_CPM / sum(Total_CPM) * 100,
+    rank = row_number()
+  )
+
+# ---- Define thresholds and calculate positions -----------------------------
+thresholds <- c(80, 85, 90, 95, 99)
+cutoffs <- sapply(thresholds, function(x) {
+  which(abundance_vOTUs_infant$cumulative_percentage >= x)[1]
+})
+
+# ---- Create data frame with labels -----------------------------------------
+line_data <- data.frame(
+  threshold = thresholds,
+  x = cutoffs,
+  y = rep(101, length(thresholds)),
+  label = paste0(thresholds, "%")
+)
+
+# ---- Create the plot -------------------------------------------------------
+max_rank <- max(abundance_vOTUs_infant$rank)
+
+core_plot_infant <- ggplot(abundance_vOTUs_infant, aes(x = rank, y = cumulative_percentage)) +
+  geom_line(color = "navy", size = 1.2) +
+  geom_vline(data = line_data, aes(xintercept = x),
+             linetype = "dashed",
+             color = c("steelblue", "orange", "forestgreen", "red", "purple"),
+             size = 0.8) +
+  geom_text(data = line_data, aes(x = x, y = y, label = label),
+            color = c("steelblue", "orange", "forestgreen", "red", "purple"),
+            size = 5, fontface = "bold", vjust = 0) +
+  scale_x_continuous(
+    breaks = pretty(0:max_rank, n = 10),
+    limits = c(0, max_rank + 5),
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(limits = c(0, 105)) +
+  labs(
+    x = "Number of vOTUs (infant samples)",
+    y = "Cumulative abundance (%)",
+    title = "Infant core phageome definition by cumulative abundance (CPM)"
+  ) +
+  theme_minimal(base_size = 16) +
+  theme(
+    plot.title = element_text(face = "bold", size = 18, hjust = 0.5),
+    axis.text = element_text(size = 13),
+    axis.title = element_text(size = 15)
+  )
+
+# ---- Show the plot ---------------------------------------------------------
+print(core_plot_infant)
+
+```
+
+
+
+```{r}
+library(dplyr)
+
+# ---- Define all the desired thresholds -------------------------------------
+thresholds <- c(50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 99)
+
+# ---- Obtain abundance curve per group --------------------------------------
+get_core_curve <- function(phage_results, filtro) {
+  phage_results %>%
+    filter(!!rlang::parse_expr(filtro)) %>%
+    group_by(vOTUs) %>%
+    summarise(total_cpm = sum(CPM, na.rm = TRUE), .groups = "drop") %>%
+    arrange(desc(total_cpm)) %>%
+    mutate(
+      cum_cpm = cumsum(total_cpm),
+      cum_perc = cum_cpm / sum(total_cpm) * 100
+    )
+}
+
+# ---- List of groups --------------------------------------------------------
+grupos <- list(
+  "All samples infant" = 'mother_infant == "infant"',
+  "1 Week Infant" = 'mother_infant == "infant" & timepoint_months == 0.25',
+  "1 Month Infant" = 'mother_infant == "infant" & timepoint_months == 1',
+  "6 Months Infant" = 'mother_infant == "infant" & timepoint_months == 6',
+  "12 Months Infant" = 'mother_infant == "infant" & timepoint_months == 12'
+)
+
+# ---- Build complete table --------------------------------------------------
+tabla_completa <- data.frame(`Cumulative abundance (%)` = thresholds)
+
+for (nombre in names(grupos)) {
+  core_curve <- get_core_curve(phage_results, grupos[[nombre]])
+  votu_counts <- sapply(thresholds, function(th) {
+    sum(core_curve$cum_perc <= th)
+  })
+  tabla_completa[[nombre]] <- votu_counts
+}
+
+# ---- Show table ------------------------------------------------------------
+print(tabla_completa)
+```
+
+
+```{r}
+# Save table
+write.csv(
+  tabla_completa,
+  file = file.path(out_dir, "summary_core_vOTUs_by_timepoint.csv"),
+  row.names = FALSE
+)
+
+# Save plot
+ggsave(
+  filename = file.path(out_dir, "UpSet_core85_transmission_final.png"),
+  plot     = plot_core_transmission,
+  width    = 10,
+  height   = 5,
+  dpi      = 300
+)
+```
+
