@@ -1,35 +1,30 @@
 # MAMI phageome analysis pipeline
 
-This repository contains the complete pipeline used in the analysis of the infant-maternal phageome in the MAMI cohort, as described in [Paper title].
+## Overview
 
-### Pipeline overview:
-1. Quality control and trimming
-2. De novo assembly (SPAdes)
-3. Virus detection (geNomad)
-4. Clustering and vOTU definition (ANI-based)
-5. Mapping and quantification (BBMap, CPM)
-6. Functional and taxonomic annotation (CheckV, iPHoP, Taxmyphage, BACPHLIP)
+This repository contains the analysis pipeline used to reconstruct and analyze the infant gut phageome from shotgun metagenomic sequencing data of the MAMI cohort.
 
-### Reproducibility:
-All steps are modular, documented, and compatible with Linux environments. Conda environment files are provided.
+### Pipeline summary
 
-### 🔹 Folder structure
+1. **Quality control and trimming**
+   Raw reads were quality-checked using FastQC and summarized with MultiQC.
 
-```md
-## 📁 Folder Structure
+2. **Metagenomic assembly**
+   Each sample was assembled independently using SPAdes in metagenomic mode.
 
-phageome_mami_pipeline/
-├── scripts/ # All pipeline scripts organized by step
-│ ├── 01_qc/ # Quality control (FastQC, MultiQC)
-│ ├── 02_assembly/ # SPAdes assembly and contig organization
-│ ├── 03_genomad/ # Viral detection with geNomad
-│ ├── 04_clustering/ # Clustering of vOTUs based on ANI
-│ ├── 05_mapping/ # Read mapping and CPM calculation
-│ ├── 06_postprocessing/ # Renaming, filtering, and matrix processing
-│ ├── 07_annotation/ # Annotation tools: CheckV, iPHoP, BACPHLIP, Taxmyphage
-│ └── 08_final_outputs/ # Organization of final results for analysis
-├── envs/ # Conda environment files
-├── data/ # Example data (non-sensitive)
-├── docs/ # Documentation or diagrams
-├── output/ # Final results (CPM matrices, etc.)
-└── plots_stats/ # R scripts and notebooks for stats and plots
+3. **Viral sequence detection**
+   Viral contigs were identified using geNomad.
+
+4. **vOTU clustering**
+   Viral contigs were clustered into non-redundant vOTUs using 95% ANI and 85% alignment fraction thresholds (anicalc/aniclust).
+
+5. **Abundance estimation**
+   Reads were mapped back to vOTU representatives using BBMap and normalized as CPM/RPK.
+
+6. **Host prediction and annotation**
+   Host assignment was performed using iPHoP and taxonomic annotation using geNomad/taxMyPhage.
+
+7. **Ecological analyses**
+   Diversity metrics, ordinations, and statistical analyses were performed in R.
+
+The final outputs include the curated vOTU catalogue and all figures used in the manuscript.
