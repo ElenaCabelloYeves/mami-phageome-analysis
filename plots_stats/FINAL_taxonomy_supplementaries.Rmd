@@ -1,0 +1,340 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-12-23"
+---
+## THIS IS THE TAXONOMY FOR ALL!!!
+
+```{r}
+## PHAGES
+# ===================== HELPERS =====================
+extract_clean_genus <- function(x){
+  g <- ifelse(!is.na(x) & str_detect(x, "g__"),
+              str_replace(x, ".*g__", ""),
+              NA_character_)
+  g <- sub("_[A-Z]$", "", g)
+  dplyr::recode(g,
+    "Kleibsella" = "Klebsiella",
+    "Gemminger"  = "Gemmiger",
+    .default = g
+  )
+}
+
+base_prepare <- function(df){
+  df %>%
+    mutate(
+      Group = dplyr::case_when(
+        mother_infant == "infant" & timepoint_months == 0.25 ~ "1 week",
+        mother_infant == "infant" & timepoint_months == 1    ~ "1 month",
+        mother_infant == "infant" & timepoint_months == 6    ~ "6 months",
+        mother_infant == "infant" & timepoint_months == 12   ~ "12 months",
+        mother_infant == "mother" & bodysite == "stool"      ~ "mothers",
+        bodysite == "breastmilk"                             ~ "milk",
+        TRUE ~ NA_character_
+      ),
+      Genus_raw = extract_clean_genus(Host.genus),
+      Genus = ifelse(is.na(Genus_raw) | Genus_raw == "" | Genus_raw == "NA",
+                     "Unclassified", Genus_raw)
+    ) %>%
+    filter(!is.na(Group)) %>%
+    filter(CPM > 0)
+}
+
+ensure_palette <- function(levels_vec, pal){
+  miss <- setdiff(levels_vec, names(pal))
+  if(length(miss) > 0){
+    pal <- c(pal, setNames(scales::hue_pal()(length(miss)), miss))
+  }
+  pal
+}
+
+# ===================== PLOT =====================
+plot_topN_with_other_unclassified <- function(
+  df,
+  top_n = 10,
+  top_from = c("all","stool"),
+  title = "Average proportional distribution of predicted host genera (CPM)"
+){
+  top_from <- match.arg(top_from)
+
+  dat <- base_prepare(df)
+
+  cpm_by_sample_genus <- dat %>%
+    group_by(Sample, Group, Genus) %>%
+    summarise(total_CPM = sum(CPM), .groups = "drop")
+
+  # ---- define TOP N (excluye Unclassified de la competición) ----
+  if(top_from == "stool"){
+    cpm_for_top <- dat %>%
+      filter(bodysite == "stool") %>%
+      group_by(Sample, Genus) %>%
+      summarise(total_CPM = sum(CPM), .groups = "drop")
+  } else {
+    cpm_for_top <- cpm_by_sample_genus %>%
+      select(Sample, Genus, total_CPM)
+  }
+
+  top_genera <- cpm_for_top %>%
+    filter(Genus != "Unclassified") %>%
+    group_by(Genus) %>%
+    summarise(global_CPM = sum(total_CPM), .groups = "drop") %>%
+    arrange(desc(global_CPM)) %>%
+    slice_head(n = top_n) %>%
+    pull(Genus)
+
+  df_collapsed <- cpm_by_sample_genus %>%
+    mutate(
+      Genus_collapsed = dplyr::case_when(
+        Genus == "Unclassified"       ~ "Unclassified",
+        Genus %in% top_genera         ~ Genus,
+        TRUE                          ~ "Other"
+      )
+    ) %>%
+    group_by(Sample, Group, Genus_collapsed) %>%
+    summarise(total_CPM = sum(total_CPM), .groups = "drop")
+
+  # Proporción REAL por muestra (incluyendo Other + Unclassified)
+  prop <- df_collapsed %>%
+    group_by(Sample) %>%
+    mutate(Proportion = total_CPM / sum(total_CPM)) %>%
+    ungroup()
+
+  # Media por grupo (manteniendo proporciones reales)
+  group_mean <- prop %>%
+    group_by(Group, Genus_collapsed) %>%
+    summarise(Mean_Proportion = mean(Proportion), .groups = "drop")
+
+  group_levels <- c("1 week","1 month","6 months","12 months","mothers","milk")
+  group_mean$Group <- factor(group_mean$Group, levels = group_levels)
+
+  # Orden de la leyenda: top (por abundancia) + Other + Unclassified
+  genus_order <- c(
+    top_genera[top_genera %in% group_mean$Genus_collapsed],
+    "Other", "Unclassified"
+  )
+  group_mean$Genus_collapsed <- factor(group_mean$Genus_collapsed, levels = genus_order)
+
+  pal <- ensure_palette(levels(group_mean$Genus_collapsed), user_palette)
+  pal["Other"] <- "grey70"
+  pal["Unclassified"] <- "grey30"
+
+ggplot(group_mean, aes(Group, Mean_Proportion, fill = Genus_collapsed)) +
+  geom_col(color = "black", linewidth = 0.2) +
+  scale_y_continuous(limits = c(0, 100), breaks = seq(0, 100, 10)) +
+  scale_fill_manual(values = pal, drop = FALSE) +
+  labs(x = NULL, y = "Relative abundance (%)", fill = "Predicted host genus", title = title) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_text(angle = 30, hjust = 1),
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold")
+  )
+
+}
+```
+
+```{r}
+plot_topN_with_other_unclassified <- function(
+  df,
+  top_n = 10,
+  top_from = c("all","stool"),
+  title = "Predicted host genera (CPM): top10 + Other + Unclassified"
+){
+  top_from <- match.arg(top_from)
+
+  dat <- base_prepare(df)
+
+  cpm_by_sample_genus <- dat %>%
+    group_by(Sample, Group, Genus) %>%
+    summarise(total_CPM = sum(CPM), .groups = "drop")
+
+  # ---- define TOP N (excluye Unclassified de la competición) ----
+  if(top_from == "stool"){
+    cpm_for_top <- dat %>%
+      filter(bodysite == "stool") %>%
+      group_by(Sample, Genus) %>%
+      summarise(total_CPM = sum(CPM), .groups = "drop")
+  } else {
+    cpm_for_top <- cpm_by_sample_genus %>%
+      select(Sample, Genus, total_CPM)
+  }
+
+  top_genera <- cpm_for_top %>%
+    filter(Genus != "Unclassified") %>%
+    group_by(Genus) %>%
+    summarise(global_CPM = sum(total_CPM), .groups = "drop") %>%
+    arrange(desc(global_CPM)) %>%
+    slice_head(n = top_n) %>%
+    pull(Genus)
+
+  # Colapsar a: top + Other + Unclassified
+  df_collapsed <- cpm_by_sample_genus %>%
+    mutate(
+      Genus_collapsed = dplyr::case_when(
+        Genus == "Unclassified" ~ "Unclassified",
+        Genus %in% top_genera   ~ Genus,
+        TRUE                    ~ "Other"
+      )
+    ) %>%
+    group_by(Sample, Group, Genus_collapsed) %>%
+    summarise(total_CPM = sum(total_CPM), .groups = "drop")
+
+  # >>> CLAVE: completar ceros para que cada Sample tenga todas las categorías
+  all_levels <- c(top_genera, "Other", "Unclassified")
+  df_collapsed <- df_collapsed %>%
+    group_by(Sample, Group) %>%
+    tidyr::complete(Genus_collapsed = all_levels, fill = list(total_CPM = 0)) %>%
+    ungroup()
+
+  # Proporciones por muestra (0–100)
+  prop <- df_collapsed %>%
+    group_by(Sample) %>%
+    mutate(Proportion = 100 * total_CPM / sum(total_CPM)) %>%
+    ungroup()
+
+  # Media por grupo (ahora sí suma 100)
+  group_mean <- prop %>%
+    group_by(Group, Genus_collapsed) %>%
+    summarise(Mean_Proportion = mean(Proportion), .groups = "drop")
+
+  group_levels <- c("1 week","1 month","6 months","12 months","mothers","milk")
+  group_mean$Group <- factor(group_mean$Group, levels = group_levels)
+
+  group_mean$Genus_collapsed <- factor(group_mean$Genus_collapsed, levels = all_levels)
+
+  pal <- ensure_palette(levels(group_mean$Genus_collapsed), user_palette)
+  pal["Other"] <- "grey70"
+  pal["Unclassified"] <- "grey30"
+
+  ggplot(group_mean, aes(Group, Mean_Proportion, fill = Genus_collapsed)) +
+    geom_col(color = "black", linewidth = 0.2) +
+    scale_y_continuous(limits = c(0, 100), breaks = seq(0, 100, 25)) +
+    scale_fill_manual(values = pal, drop = FALSE) +
+    labs(x = NULL, y = "Relative abundance (%)", fill = "Predicted host genus", title = title) +
+    theme_minimal(base_size = 12) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      axis.text.x = element_text(angle = 30, hjust = 1),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold")
+    )
+}
+```
+
+
+```{r}
+p_tax_full <- plot_topN_with_other_unclassified(
+  df,
+  top_n = 10,
+  top_from = "stool",
+  title = "Predicted host genera (CPM): top10 + Other + Unclassified"
+)
+
+print(p_tax_full)
+
+ggsave(file.path(fig_dir, "top10_plus_OTHER_plus_UNCLASSIFIED_topFromSTOOL.png"),
+       p_tax_full, width = 11, height = 10, dpi = 300)
+
+ggsave(file.path(out_dir, "top10_plus_OTHER_plus_UNCLASSIFIED_topFromSTOOL.pdf"),
+       p_tax_full, width = 11, height = 10, bg = "white")
+```
+
+
+
+
+
+```{r}
+# ===================== PANEL 3 (BACTERIA for PHAGE top10 host genera)
+#          - incluye TODA la taxonomía vía Other + Unclassified
+#          - incluye milk si existe en MMC3
+#          - lista top10 definida desde PHAGES (stool only)
+# =====================
+
+# 1) Top10 host genera definidos desde PHAGES (stool only)
+top10_phage_genera <- phage_stool %>%
+  group_by(Genus) %>%
+  summarise(global = sum(CPM_genus, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(global)) %>%
+  slice_head(n = 10) %>%
+  pull(Genus)
+
+# 2) Preparar bacterias (MMC3)
+bact_for_phageTop10_full <- bact_genus %>%
+  filter(!is.na(Group)) %>%
+  transmute(
+    Sample,
+    Group,
+    Genus_raw = Genus,
+    Rel_abund_bact = Rel_abund_bact
+  ) %>%
+  filter(!is.na(Rel_abund_bact), Rel_abund_bact > 0) %>%
+  mutate(
+    Genus_clean = ifelse(is.na(Genus_raw) | Genus_raw == "" | Genus_raw == "NA",
+                         "Unclassified", Genus_raw),
+    Genus_collapsed = case_when(
+      Genus_clean == "Unclassified"       ~ "Unclassified",
+      Genus_clean %in% top10_phage_genera ~ Genus_clean,
+      TRUE                                ~ "Other"
+    )
+  ) %>%
+  group_by(Sample, Group, Genus_collapsed) %>%
+  summarise(Rel_abund_bact = sum(Rel_abund_bact, na.rm = TRUE), .groups = "drop")
+
+# 3) Plot (0–100, proporciones reales; mean incluye ceros via complete)
+plot_bact_top10phage_with_other_unclassified <- function(df, title, fill_title, palette, top_levels){
+
+  all_levels <- c(top_levels, "Other", "Unclassified")
+
+  dat0 <- df %>%
+    group_by(Sample, Group) %>%
+    tidyr::complete(Genus_collapsed = all_levels, fill = list(Rel_abund_bact = 0)) %>%
+    ungroup()
+
+  prop <- dat0 %>%
+    group_by(Sample) %>%
+    mutate(Proportion = 100 * Rel_abund_bact / sum(Rel_abund_bact)) %>%
+    ungroup()
+
+  group_mean <- prop %>%
+    group_by(Group, Genus_collapsed) %>%
+    summarise(Mean_Proportion = mean(Proportion), .groups = "drop")
+
+  group_levels2 <- c("1 week","1 month","6 months","12 months","mothers","milk")
+  group_mean$Group <- factor(group_mean$Group, levels = group_levels2)
+  group_mean$Genus_collapsed <- factor(group_mean$Genus_collapsed, levels = all_levels)
+
+  pal <- ensure_palette(levels(group_mean$Genus_collapsed), palette)
+  pal["Other"] <- "grey70"
+  pal["Unclassified"] <- "grey30"
+
+  ggplot(group_mean, aes(Group, Mean_Proportion, fill = Genus_collapsed)) +
+    geom_col(color = "black", linewidth = 0.2) +
+    scale_y_continuous(limits = c(0, 100), breaks = seq(0, 100, 25)) +
+    scale_fill_manual(values = pal, drop = FALSE) +
+    labs(x = NULL, y = "Relative abundance (%)", fill = fill_title, title = title) +
+    theme_minimal(base_size = 12) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      axis.text.x = element_text(angle = 30, hjust = 1),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold")
+    )
+}
+
+p_bact_for_phageTop10_full <- plot_bact_top10phage_with_other_unclassified(
+  df = bact_for_phageTop10_full,
+  title = "Bacteria (MMC3) for phage top-10 host genera — incl. milk (Other + Unclassified)",
+  fill_title = "Bacterial genus",
+  palette = user_palette_pastel,
+  top_levels = top10_phage_genera
+)
+
+print(p_bact_for_phageTop10_full)
+
+ggsave(file.path(out_dir, "BACT_for_PHAGE_top10_PLUS_OTHER_PLUS_UNCLASSIFIED_inclMilk.png"),
+       p_bact_for_phageTop10_full, width = 11, height = 10, dpi = 300, bg = "white")
+ggsave(file.path(out_dir, "BACT_for_PHAGE_top10_PLUS_OTHER_PLUS_UNCLASSIFIED_inclMilk.pdf"),
+       p_bact_for_phageTop10_full, width = 11, height = 10, bg = "white")
+```
+

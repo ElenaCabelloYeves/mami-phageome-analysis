@@ -188,6 +188,10 @@ p_alpha_bact <- ggplot(alpha_bact,
 ggsave(file.path(fig_bact_dir, "alpha_bacteria.png"),
        p_alpha_bact, width = 9, height = 7, dpi = 300)
 
+ggsave(file.path(fig_bact_dir, "alpha_bacteria.pdf"),
+       p_alpha_bact, width = 9, height = 7)
+
+
 # ---- Alpha diversity phage + bacteria together  ----
 p_alpha_both <- ggplot(alpha_combined,
                        aes(x = timepoint_label, y = shannon,
@@ -222,6 +226,15 @@ p_alpha_both <- ggplot(alpha_combined,
 
 ggsave(file.path(fig_dir, "alpha_phage_bacteria_together.png"),
        p_alpha_both, width = 9, height = 7, dpi = 300)
+
+ggsave(
+  file.path(fig_dir, "alpha_phage_bacteria_together.pdf"),
+  plot = p_alpha_both,
+  device = cairo_pdf,   # recomendado para paper
+  width = 9,
+  height = 7,
+  units = "in"
+)
 
 ## ---- Beta diversity of phages (PCoA Bray–Curtis)----------
 OTUDistMat <- vegdist(phage_mat, method = "bray")
@@ -259,6 +272,9 @@ pcoa_phage_plot <- ggplot(PCoA_df,
 
 ggsave(file.path(fig_phage_dir, "beta_phage_pcoa.png"),
        pcoa_phage_plot, width = 9, height = 8, dpi = 300)
+
+ggsave(file.path(fig_phage_dir, "beta_phage_pcoa.pdf"),
+       pcoa_phage_plot, width = 9, height = 8)
 
 # PERMANOVA phages
 otu_samples  <- labels(OTUDistMat)
@@ -317,6 +333,11 @@ pcoa_bact_plot <- ggplot(bact_pcoa_df,
 ggsave(file.path(fig_bact_dir, "beta_bacteria_pcoa.png"),
        pcoa_bact_plot, width = 9, height = 8, dpi = 300)
 
+# PDF
+ggsave(file.path(fig_bact_dir, "beta_bacteria_pcoa.pdf"),
+       pcoa_bact_plot, width = 9, height = 8)
+
+
 ## ---- PERMANOVA BACTERIA ----
 
 samples_bact <- bact_pcoa_df$Sample
@@ -351,5 +372,13 @@ p_beta_both <- pcoa_phage_plot + pcoa_bact_plot +
 
 ggsave(file.path(fig_dir, "beta_phage_bacteria_side_by_side.png"),
        p_beta_both, width = 14, height = 7, dpi = 300)
+
+# PDF
+ggsave(
+  file.path(fig_dir, "beta_phage_bacteria_side_by_side.pdf"),
+  p_beta_both,
+  width = 14, height = 7
+)
+
 ```
 

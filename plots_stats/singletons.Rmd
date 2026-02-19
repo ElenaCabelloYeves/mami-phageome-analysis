@@ -1,0 +1,230 @@
+---
+title: "Singletons"
+output: html_document
+date: "2026-01-19"
+---
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(here)
+library(readr)
+
+# ---- Define output dir inside the repository -------------------------------
+out_dir <- here("results", "FigureSx_singletons")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# ---- Load the data ---------------------------------------------------------
+phage_results_path <- here("data", "results_with_metadata.csv")
+phage_results <- read_csv(phage_results_path, show_col_types = FALSE)
+
+# ---- Filter just infant samples --------------------------------------------
+phage_results_infant <- phage_results %>%
+  filter(mother_infant == "infant")
+
+# ---- Count in how many infant samples each vOTU occurs ---------------------
+# Presence defined as CPM > 0 (adjust if you prefer CPM >= 1, etc.)
+votu_occurrence <- phage_results_infant %>%
+  mutate(present = CPM > 0) %>%
+  filter(present) %>%                              # keep only present pairs
+  distinct(vOTUs, Sample) %>%                      # one presence per sample
+  count(vOTUs, name = "n_samples")                 # number of samples per vOTU
+
+# ---- Frequency distribution: X = n_samples, Y = number of vOTUs ------------
+occurrence_freq <- votu_occurrence %>%
+  count(n_samples, name = "n_vOTUs") %>%
+  arrange(n_samples)
+
+# (Optional) ensure missing x values appear as 0 bars
+occurrence_freq <- occurrence_freq %>%
+  complete(n_samples = 1:max(n_samples, na.rm = TRUE), fill = list(n_vOTUs = 0))
+
+# ---- Plot ------------------------------------------------------------------
+p_occurrence <- ggplot(occurrence_freq, aes(x = n_samples, y = n_vOTUs)) +
+  geom_col(fill = "grey30") +
+  labs(
+    x = "Number of infant samples in which each vOTU is detected",
+    y = "Number of vOTUs",
+    title = "Frequency of vOTU occurrence across infant samples"
+  ) +
+  theme_minimal(base_size = 16) +
+  theme(
+    plot.title = element_text(face = "bold", size = 18, hjust = 0.5),
+    axis.text = element_text(size = 13),
+    axis.title = element_text(size = 15)
+  )
+
+print(p_occurrence)
+
+# ---- Save plot and table ---------------------------------------------------
+ggsave(
+  filename = file.path(out_dir, "FigureSx_vOTU_occurrence_infant.png"),
+  plot     = p_occurrence,
+  width    = 8,
+  height   = 5,
+  dpi      = 300
+)
+
+write.csv(
+  occurrence_freq,
+  file = file.path(out_dir, "FigureSx_vOTU_occurrence_infant_counts.csv"),
+  row.names = FALSE
+)
+
+# ---- Quick singleton summary (nice for Results text) ------------------------
+singleton_stats <- votu_occurrence %>%
+  summarise(
+    total_vOTUs = n(),
+    singletons = sum(n_samples == 1),
+    pct_singletons = 100 * singletons / total_vOTUs
+  )
+
+print(singleton_stats)
+
+```
+
+
+```{r}
+library(patchwork)
+
+p_full <- p_occurrence
+
+p_zoom <- ggplot(occurrence_freq %>% filter(n_samples >= 2),
+                 aes(n_samples, n_vOTUs)) +
+  geom_col(fill = "grey30") +
+  labs(
+    x = "Number of infant samples (≥2)",
+    y = "Number of vOTUs",
+    title = "Zoom excluding singletons"
+  ) +
+  theme_minimal(base_size = 16) +
+  theme(plot.title = element_text(face="bold", hjust=0.5))
+
+p_combo <- p_full / p_zoom + plot_layout(heights = c(1, 1))
+
+print(p_combo)
+
+ggsave(
+  filename = file.path(out_dir, "FigureSx_vOTU_occurrence_infant_full_plus_zoom.png"),
+  plot     = p_combo,
+  width    = 8, height = 9, dpi = 300
+)
+```
+
+
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+occ_bin <- votu_occurrence %>%
+  mutate(bin = case_when(
+    n_samples == 1            ~ "1",
+    n_samples == 2            ~ "2",
+    n_samples >= 3 & n_samples <= 5   ~ "3–5",
+    n_samples >= 6 & n_samples <= 10  ~ "6–10",
+    n_samples >= 11 & n_samples <= 20 ~ "11–20",
+    n_samples >= 21 & n_samples <= 50 ~ "21–50",
+    n_samples >= 51                    ~ "51+"
+  )) %>%
+  count(bin, name = "n_vOTUs") %>%
+  mutate(bin = factor(bin, levels = c("1","2","3–5","6–10","11–20","21–50","51+")))
+
+p_binned <- ggplot(occ_bin, aes(bin, n_vOTUs)) +
+  geom_col(fill = "grey30") +
+  scale_y_log10() +
+  labs(
+    x = "Number of infant samples in which each vOTU is detected (binned)",
+    y = "Number of vOTUs (log10)",
+    title = "Frequency of vOTU occurrence across infant samples"
+  ) +
+  theme_minimal(base_size = 16) +
+  theme(
+    plot.title = element_text(face="bold", hjust=0.5),
+    axis.text.x = element_text(angle = 0, hjust = 0.5)
+  )
+
+print(p_binned)
+
+```
+
+```{r}
+cdf_df <- occurrence_freq %>%
+  arrange(n_samples) %>%
+  mutate(cum_prop = cumsum(n_vOTUs) / sum(n_vOTUs))
+
+p_cdf <- ggplot(cdf_df, aes(n_samples, cum_prop)) +
+  geom_line(linewidth = 1) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(
+    x = "Number of infant samples",
+    y = "Cumulative fraction of vOTUs",
+    title = "Cumulative distribution of vOTU occurrence across infant samples"
+  ) +
+  theme_minimal(base_size = 16) +
+  theme(plot.title = element_text(face="bold", hjust=0.5))
+
+print(p_cdf)
+```
+
+```{r}
+p_cdf_step <- ggplot(cdf_df, aes(n_samples, cum_prop)) +
+  geom_step(linewidth = 1) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0,1)) +
+  labs(
+    x = "Number of infant samples in which each vOTU is detected",
+    y = "Cumulative fraction of vOTUs",
+    title = "Cumulative distribution of vOTU occurrence across infant samples"
+  ) +
+  theme_minimal(base_size = 16) +
+  theme(plot.title = element_text(face="bold", hjust=0.5))
+
+print(p_cdf_step)
+```
+
+
+```{r}
+# ---- Save plot and table ---------------------------------------------------
+ggsave(
+  filename = file.path(out_dir, "p_cdf.png"),
+  plot     = p_cdf,
+  width    = 8,
+  height   = 5,
+  dpi      = 300
+)
+```
+
+```{r}
+# cola (sin singletons) en escala lineal
+tail_df <- occurrence_freq %>% filter(n_samples >= 2)
+
+p_tail <- ggplot() +
+  # barra de singletons
+  geom_col(
+    data = occurrence_freq %>% filter(n_samples == 1),
+    aes(x = n_samples, y = n_vOTUs),
+    fill = "grey30", width = 0.9
+  ) +
+  # cola como línea/puntos (para que se vea sin aplastar)
+  geom_line(
+    data = tail_df,
+    aes(x = n_samples, y = n_vOTUs),
+    linewidth = 1
+  ) +
+  geom_point(
+    data = tail_df,
+    aes(x = n_samples, y = n_vOTUs),
+    size = 2
+  ) +
+  labs(
+    x = "Number of infant samples in which each vOTU is detected",
+    y = "Number of vOTUs",
+    title = "vOTU occurrence across infant samples (singletons + tail)"
+  ) +
+  theme_minimal(base_size = 16) +
+  theme(plot.title = element_text(face="bold", hjust=0.5))
+
+print(p_tail)
+```

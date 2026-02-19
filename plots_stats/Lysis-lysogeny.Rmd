@@ -1,0 +1,347 @@
+---
+title: "Scripts"
+output: html_document
+date: "2026-01-19"
+---
+
+```{r}
+library(dplyr)
+library(readr)
+library(here)
+library(ggplot2)
+
+## ---- Inputs --------------------------------------------
+phage_csv <- here("data", "results_with_metadata.csv")
+
+## ---- Output directory ----------------------------------
+out_dir <- here("results", "phage_lifestyle_weighted")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+## ---- 1) Load data --------------------------------------
+df <- read_csv(phage_csv, show_col_types = FALSE)
+
+# Checks mínimos
+stopifnot(all(c("vOTUs","Host.genus","CPM","Virulent","Temperate") %in% names(df)))
+
+df2 <- df %>%
+  filter(!is.na(Host.genus), !is.na(CPM), CPM >= 0) %>%
+  mutate(
+    Virulent = as.numeric(Virulent),
+    Temperate = as.numeric(Temperate)
+  )
+
+## ---- 2) CPM-weighted lifestyle per genus ----------------
+lifestyle_by_genus <- df2 %>%
+  group_by(Host.genus) %>%
+  summarise(
+    n_rows = n(),
+    n_vOTUs = n_distinct(vOTUs),
+    CPM_sum = sum(CPM, na.rm = TRUE),
+
+    # Unweighted (como Table S4E, aprox)
+    virulent_mean = mean(Virulent, na.rm = TRUE),
+    temperate_mean = mean(Temperate, na.rm = TRUE),
+
+    # Weighted by abundance
+    virulent_CPMweighted = sum(CPM * Virulent, na.rm = TRUE) / sum(CPM, na.rm = TRUE),
+    temperate_CPMweighted = sum(CPM * Temperate, na.rm = TRUE) / sum(CPM, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(virulent_CPMweighted))
+
+write.csv(lifestyle_by_genus,
+          file = file.path(out_dir, "lifestyle_by_genus_CPMweighted.csv"),
+          row.names = FALSE)
+
+## ---- 3) Focus on Gemmiger -------------------------------
+gemmiger_summary <- lifestyle_by_genus %>%
+  filter(Host.genus == "Gemmiger")
+
+write.csv(gemmiger_summary,
+          file = file.path(out_dir, "gemmiger_lifestyle_CPMweighted.csv"),
+          row.names = FALSE)
+
+## ---- 4) Top vOTUs in Gemmiger ---------------------------
+gemmiger_top20 <- df2 %>%
+  filter(Host.genus == "Gemmiger") %>%
+  group_by(vOTUs) %>%
+  summarise(
+    CPM = sum(CPM, na.rm = TRUE),
+    Virulent = mean(Virulent, na.rm = TRUE),
+    Temperate = mean(Temperate, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(CPM)) %>%
+  slice_head(n = 20)
+
+write.csv(gemmiger_top20,
+          file = file.path(out_dir, "gemmiger_top20_vOTUs_by_CPM.csv"),
+          row.names = FALSE)
+
+## ---- 5) Optional figure: mean vs CPM-weighted -----------
+
+# ejemplo: solo top 10 host genera por CPM_sum (para no hacer una figura interminable)
+top_genera <- lifestyle_by_genus %>%
+  arrange(desc(CPM_sum)) %>%
+  slice_head(n = 10) %>%
+  mutate(Host.genus = factor(Host.genus, levels = Host.genus))
+
+p <- ggplot(top_genera, aes(x = Host.genus)) +
+  geom_point(aes(y = virulent_mean), position = position_nudge(x = -0.15)) +
+  geom_point(aes(y = virulent_CPMweighted), position = position_nudge(x = 0.15)) +
+  labs(
+    x = "Host genus",
+    y = "Virulent probability",
+    title = "Predicted lifestyle by host genus (mean vs CPM-weighted)"
+  ) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave(filename = file.path(out_dir, "virulent_mean_vs_CPMweighted_top10genera.pdf"),
+       plot = p, width = 7, height = 4)
+
+saveRDS(
+  list(
+    lifestyle_by_genus = lifestyle_by_genus,
+    gemmiger_summary = gemmiger_summary,
+    gemmiger_top20 = gemmiger_top20
+  ),
+  file = file.path(out_dir, "lifestyle_weighted_results.rds")
+)
+
+```
+
+
+```{r}
+library(tidyr)
+
+plot_df <- top_genera %>%
+  select(Host_genus_short, virulent_mean, virulent_CPMweighted) %>%
+  pivot_longer(
+    cols = c(virulent_mean, virulent_CPMweighted),
+    names_to = "metric",
+    values_to = "value"
+  )
+
+p <- ggplot(plot_df, aes(x = Host_genus_short, y = value, color = metric)) +
+  geom_point(position = position_dodge(width = 0.3), size = 2) +
+  labs(
+    x = "Host genus",
+    y = "Virulent probability",
+    color = "",
+    title = "Predicted lifestyle by host genus"
+  ) +
+  scale_color_manual(
+    values = c("virulent_mean" = "black",
+               "virulent_CPMweighted" = "red"),
+    labels = c("Mean per vOTU", "CPM-weighted")
+  ) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+print(p)
+```
+
+
+
+```{r}
+## =========================================================
+## Phage lifestyle (mean vs CPM-weighted) + top vOTUs (Gemmiger)
+## Coherent colors (same palette) + genus labels after g__
+## =========================================================
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(stringr)
+  library(readr)
+  library(here)
+  library(ggplot2)
+  library(scales)
+})
+
+## ---- Inputs --------------------------------------------
+phage_csv <- here("data", "results_with_metadata.csv")
+
+## ---- Output directory ----------------------------------
+out_dir <- here("results", "phage_lifestyle_weighted")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+## ---- Palette of colors ---------------------------------
+custom_colors <- c(
+  "Streptococcus"    = "pink",
+  "Bacteroides"      = "mediumaquamarine",
+  "Escherichia"      = "gold",
+  "Faecalibacterium" = "#C499CC",
+  "Bifidobacterium"  = "#6FA3F7",
+  "Klebsiella"       = "#7B2CBF",
+  "Blautia"          = "#90DDF0",
+  "Gemmiger"         = "#FFAC81",
+  "Ruminococcus"     = "#FA6459",
+  "Pseudomonas"      = "#EEE2DF",
+  "Veillonella"      = "darkgreen"
+)
+
+ensure_palette <- function(levels_vec, pal){
+  miss <- setdiff(levels_vec, names(pal))
+  if(length(miss) > 0){
+    pal <- c(pal, setNames(scales::hue_pal()(length(miss)), miss))
+  }
+  pal
+}
+
+## ---- Helpers -------------------------------------------
+extract_clean_phage_genus <- function(x){
+  # keeps only what goes after g__ (up to ; if present)
+  g <- ifelse(!is.na(x) & str_detect(x, "g__"),
+              str_extract(x, "(?<=g__)[^;]+"),
+              as.character(x))
+  g <- str_replace(g, "_[A-Z]$", "")
+  g <- str_trim(g)
+  dplyr::recode(g,
+                "Kleibsella" = "Klebsiella",
+                "Gemminger"  = "Gemmiger",
+                .default = g)
+}
+
+## ---- 1) Load data --------------------------------------
+df <- read_csv(phage_csv, show_col_types = FALSE)
+
+stopifnot(all(c("vOTUs","Host.genus","CPM","Virulent","Temperate") %in% names(df)))
+
+df2 <- df %>%
+  filter(!is.na(Host.genus), !is.na(CPM), CPM > 0) %>%
+  mutate(
+    Host_genus_short = extract_clean_phage_genus(Host.genus),
+    Virulent  = as.numeric(Virulent),
+    Temperate = as.numeric(Temperate)
+  ) %>%
+  filter(!is.na(Host_genus_short), Host_genus_short != "",
+         !is.na(Virulent), !is.na(Temperate))
+
+# Convert 0-100 -> 0-1 if needed
+if (max(df2$Virulent, na.rm = TRUE) > 1.5 || max(df2$Temperate, na.rm = TRUE) > 1.5) {
+  df2 <- df2 %>% mutate(Virulent = Virulent/100, Temperate = Temperate/100)
+}
+
+## ---- 2) Lifestyle per genus (mean vs CPM-weighted) ------
+lifestyle_by_genus <- df2 %>%
+  group_by(Host_genus_short) %>%
+  summarise(
+    n_rows  = n(),
+    n_vOTUs = n_distinct(vOTUs),
+    CPM_sum = sum(CPM, na.rm = TRUE),
+
+    virulent_mean   = mean(Virulent, na.rm = TRUE),
+    temperate_mean  = mean(Temperate, na.rm = TRUE),
+
+    virulent_CPMweighted  = sum(CPM * Virulent, na.rm = TRUE) / sum(CPM, na.rm = TRUE),
+    temperate_CPMweighted = sum(CPM * Temperate, na.rm = TRUE) / sum(CPM, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(CPM_sum))
+
+write.csv(lifestyle_by_genus,
+          file = file.path(out_dir, "lifestyle_by_genus_mean_vs_CPMweighted.csv"),
+          row.names = FALSE)
+
+## ---- 3) Plot: top 10 genera by CPM_sum ------------------
+top_genera <- lifestyle_by_genus %>%
+  arrange(desc(CPM_sum)) %>%
+  slice_head(n = 10) %>%
+  mutate(
+    Host_genus_short = factor(Host_genus_short, levels = Host_genus_short)
+  )
+
+top_genera <- top_genera %>%
+  arrange(desc(virulent_CPMweighted)) %>%   # orden visual
+  mutate(
+    Host_genus_short = factor(Host_genus_short, levels = Host_genus_short)
+  )
+
+pal_top <- ensure_palette(levels(top_genera$Host_genus_short), custom_colors)
+
+p_top10_vir <- ggplot(top_genera, aes(x = Host_genus_short, color = Host_genus_short)) +
+  geom_segment(
+    aes(xend = Host_genus_short, y = virulent_mean, yend = virulent_CPMweighted),
+    color = "grey70", linewidth = 0.6
+  ) +
+  geom_point(aes(y = virulent_mean), size = 2.4, shape = 16) +      # mean
+  geom_point(aes(y = virulent_CPMweighted), size = 2.6, shape = 17) + # CPM-weighted
+  scale_color_manual(values = pal_top, drop = FALSE) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  labs(
+    x = NULL,
+    y = "Virulent probability",
+    title = "Predicted lifestyle by host genus (top 10 by CPM)",
+    subtitle = "Circle = mean per vOTU; triangle = CPM-weighted (abundance-weighted)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_text(angle = 30, hjust = 1),
+    legend.position = "none"
+  )
+
+p_top10_temp <- ggplot(top_genera, aes(x = Host_genus_short, color = Host_genus_short)) +
+  geom_segment(
+    aes(xend = Host_genus_short, y = temperate_mean, yend = temperate_CPMweighted),
+    color = "grey70", linewidth = 0.6
+  ) +
+  geom_point(aes(y = temperate_mean), size = 2.4, shape = 16) +
+  geom_point(aes(y = temperate_CPMweighted), size = 2.6, shape = 17) +
+  scale_color_manual(values = pal_top, drop = FALSE) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  labs(
+    x = NULL,
+    y = "Temperate probability",
+    title = "Predicted lifestyle by host genus (top 10 by CPM)",
+    subtitle = "Circle = mean per vOTU; triangle = CPM-weighted (abundance-weighted)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_text(angle = 30, hjust = 1),
+    legend.position = "none"
+  )
+
+ggsave(file.path(out_dir, "top10_genus_virulent_mean_vs_CPMweighted.png"),
+       p_top10_vir, width = 11, height = 7, dpi = 300, bg = "white")
+ggsave(file.path(out_dir, "top10_genus_temperate_mean_vs_CPMweighted.png"),
+       p_top10_temp, width = 11, height = 7, dpi = 300, bg = "white")
+
+ggsave(file.path(out_dir, "top10_genus_virulent_mean_vs_CPMweighted.pdf"),
+       p_top10_vir, width = 11, height = 7, bg = "white")
+ggsave(file.path(out_dir, "top10_genus_temperate_mean_vs_CPMweighted.pdf"),
+       p_top10_temp, width = 11, height = 7, bg = "white")
+
+print(p_top10_vir)
+print(p_top10_temp)
+
+## ---- 4) Gemmiger: top 20 vOTUs by CPM -------------------
+gemmiger_top20 <- df2 %>%
+  filter(Host_genus_short == "Gemmiger") %>%
+  group_by(vOTUs) %>%
+  summarise(
+    CPM = sum(CPM, na.rm = TRUE),
+    Virulent = sum(CPM * Virulent, na.rm = TRUE) / sum(CPM, na.rm = TRUE),
+    Temperate = sum(CPM * Temperate, na.rm = TRUE) / sum(CPM, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(CPM)) %>%
+  slice_head(n = 20)
+
+write.csv(gemmiger_top20,
+          file = file.path(out_dir, "gemmiger_top20_vOTUs_by_CPM.csv"),
+          row.names = FALSE)
+
+# Optional quick print
+print(gemmiger_top20)
+
+```
+
+
+
+
+
+
+
