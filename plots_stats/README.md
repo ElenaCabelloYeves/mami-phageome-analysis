@@ -18,7 +18,7 @@ These analyses are performed after the main phageome processing workflow (mappin
   - Heatmaps and clustering of vOTUs
   - Filtering by coverage, length, or taxonomic group
 
-- **Core phageome analysis**
+- **Dominant and core phageome analyses**
   - Shared and persistent vOTUs across individuals or timepoints
   - Contribution of core vs. transient phageome components
 
