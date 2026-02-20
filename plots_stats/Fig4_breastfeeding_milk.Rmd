@@ -1,0 +1,1126 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-09-24"
+---
+
+```{r}
+# ========= fit_host_milk(): versión "simple" (sin filtros por CPM) =========
+library(dplyr)
+library(tidyr)
+library(lme4); library(lmerTest)
+library(broom.mixed)
+library(clubSandwich)
+library(purrr)
+
+fit_host_milk <- function(dflong){
+  # Asegura milk_tp como lógico (por si viniera como "Yes/No")
+  if (!is.logical(dflong$milk_tp)) {
+    dflong <- dflong %>%
+      mutate(milk_tp = case_when(
+        milk_tp %in% c(TRUE, FALSE) ~ milk_tp,
+        tolower(as.character(milk_tp)) %in% c("true","yes","y","1") ~ TRUE,
+        tolower(as.character(milk_tp)) %in% c("false","no","n","0") ~ FALSE,
+        TRUE ~ NA
+      ))
+  }
+
+  host_long <- dflong %>%
+    filter(!is.na(Host.genus), Host.genus != "") %>%
+    group_by(Sample, subject, Host.genus, milk_tp) %>%
+    summarise(CPM = sum(CPM), .groups = "drop")
+
+  # Top por prevalencia (como tenías): al menos 10 sujetos con CPM>0 y máx 30 géneros
+  keep <- host_long %>%
+    group_by(Host.genus) %>%
+    summarise(prev = mean(CPM > 0),
+              nsub = n_distinct(subject[CPM > 0]),
+              .groups = "drop") %>%
+    arrange(desc(prev)) %>%
+    filter(nsub >= 10) %>%
+    slice_head(n = 30) %>%
+    pull(Host.genus)
+
+  host_long <- host_long %>% filter(Host.genus %in% keep)
+
+  # Wide → CLR
+  wide <- host_long %>%
+    select(Sample, Host.genus, CPM) %>%
+    pivot_wider(names_from = Host.genus, values_from = CPM, values_fill = 0)
+
+  mat <- as.matrix(wide[, -1, drop = FALSE]); rownames(mat) <- wide$Sample
+  prop <- sweep(mat, 1, rowSums(mat) + 1e-12, "/"); prop[prop == 0] <- 1e-6
+  logp <- log(prop); clr <- sweep(logp, 1, rowMeans(logp), "-")
+
+  meta <- host_long %>% distinct(Sample, subject, milk_tp)
+  dfc  <- as.data.frame(clr) %>% tibble::rownames_to_column("Sample") %>%
+    left_join(meta, by = "Sample")
+
+  fit_one <- function(col){
+    ff <- reformulate("milk_tp", response = paste0("`", col, "`"))
+    out <- try({
+      m <- lmer(update(ff, . ~ . + (1 | subject)), data = dfc,
+                control = lmerControl(optimizer = "bobyqa",
+                                      optCtrl = list(maxfun = 2e5)))
+      if (isSingular(m, 1e-4)) stop("singular")
+      broom.mixed::tidy(m, effects = "fixed") %>%
+        filter(term == "milk_tpTRUE") %>%
+        transmute(taxon = col, estimate, std.error, p.value, model = "LMM")
+    }, silent = TRUE)
+    if (inherits(out, "try-error")) {
+      lmfit <- lm(ff, data = dfc)
+      vc <- clubSandwich::vcovCR(lmfit, cluster = dfc$subject, type = "CR2")
+      co <- clubSandwich::coef_test(lmfit, vcov = vc)
+      tibble(taxon = col,
+             estimate  = co["milk_tpTRUE","beta"],
+             std.error = co["milk_tpTRUE","SE"],
+             p.value   = co["milk_tpTRUE","p_Satt"],
+             model = "OLS-CR2")
+    } else out
+  }
+
+  map_dfr(colnames(clr), fit_one) %>%
+    mutate(q  = p.adjust(p.value, "BH"),
+           lo = estimate - 1.96 * std.error,
+           hi = estimate + 1.96 * std.error) %>%
+    arrange(q)
+}
+# ============================================================================
+
+
+# 1) Ajustes por timepoint
+res6  <- fit_host_milk(df6)
+res12 <- fit_host_milk(df12)
+
+# --- limpieza + etiquetas únicas ---
+clean_res <- function(res){
+  res %>%
+    mutate(
+      genus_raw   = sub(".*g__", "", taxon),
+      genus_short = sub("(_A|_B|_Q|_AQ)$", "", genus_raw),
+      suf         = sub("^[^_]+", "", genus_raw),      # "" o "_A","_B","_Q","_AQ", etc.
+      sig_cat = case_when(q < 0.05 ~ "< 0.05",
+                          q < 0.10 ~ "< 0.10",
+                          TRUE     ~ "ns"),
+      dir = ifelse(estimate > 0, "Human milk↑", "Weaned↑")
+    ) %>%
+    # etiqueta provisional (sin sufijo)
+    mutate(label = genus_short)
+}
+
+res6_c  <- clean_res(res6)
+res12_c <- clean_res(res12)
+
+# Detecta colisiones (mismo genus_short representa >1 taxon) en el conjunto combinado 6+12
+both <- dplyr::bind_rows(
+  res6_c  %>% mutate(tp = "6"),
+  res12_c %>% mutate(tp = "12")
+)
+
+dups <- both %>%
+  dplyr::count(genus_short, sort = TRUE) %>%
+  dplyr::filter(n > 1) %>%
+  dplyr::pull(genus_short)
+
+# Si hay colisión, añade el sufijo a la etiqueta para desambiguar
+res6_c  <- res6_c  %>% mutate(label = ifelse(genus_short %in% dups, paste0(genus_short, " ", suf), genus_short))
+res12_c <- res12_c %>% mutate(label = ifelse(genus_short %in% dups, paste0(genus_short, " ", suf), genus_short))
+
+# --- mismo set de géneros en 6 y 12 (p.ej. unión top15 de cada TP) ---
+top6   <- res6_c  %>% arrange(q) %>% slice_head(n = 15) %>% pull(genus_short)
+top12  <- res12_c %>% arrange(q) %>% slice_head(n = 15) %>% pull(genus_short)
+show_g <- union(top6, top12)
+
+res6_p  <- res6_c  %>% filter(genus_short %in% show_g)
+res12_p <- res12_c %>% filter(genus_short %in% show_g)
+
+# --- orden común por el efecto en 12m, usando la etiqueta ya desambiguada ---
+ord <- res12_p %>% arrange(estimate) %>% pull(label) %>% unique()
+
+res6_p  <- res6_p  %>% mutate(label = factor(label, levels = ord))
+res12_p <- res12_p %>% mutate(label = factor(label, levels = ord))
+
+# --- plot (usa 'label' en el eje Y) ---
+sig_colors <- c("< 0.05" = "purple4", "< 0.10" = "#B09DDD", "ns" = "grey75")
+
+plot_forest_sig <- function(df, title){
+  ggplot(df %>% filter(!is.na(estimate)),
+         aes(x = estimate, y = label)) +
+    geom_vline(xintercept = 0, linetype = "dashed", linewidth = 1) +
+    geom_pointrange(aes(xmin = lo, xmax = hi,
+                        color = sig_cat, shape = dir, linetype = model),
+                    linewidth = 1.1, fatten = 3.8) +
+    scale_color_manual(values = sig_colors, name = "FDR") +
+    scale_shape_manual(values = c("Human milk↑" = 16, "Weaned↑" = 2), name = "") +
+    scale_linetype_discrete(name = "Model") +
+    labs(title = title,
+         subtitle = "Effect of human milk (CLR coef; 95% CI). Positive = higher with human milk",
+         x = "Human milk (TRUE) effect", y = "Host genus") +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "right", panel.grid.minor = element_blank())
+}
+
+p6  <- plot_forest_sig(res6_p,  "Human milk effect on host genus at 6 months")
+p12 <- plot_forest_sig(res12_p, "Human milk effect on host genus at 12 months")
+
+p6; p12
+
+
+```
+
+
+
+
+```{r}
+# 1) QC por género y por grupo (añade min_pos_per_group)
+qc_by_genus <- function(dflong){
+  base <- dflong %>%
+    dplyr::filter(!is.na(Host.genus), Host.genus != "") %>%
+    dplyr::group_by(Host.genus) %>%
+    dplyr::summarise(
+      n_vOTUs        = dplyr::n_distinct(vOTUs),
+      n_subjects_pos = dplyr::n_distinct(subject[CPM > 0]),
+      n_samples_pos  = dplyr::n_distinct(Sample[CPM > 0]),
+      total_cpm      = sum(CPM, na.rm = TRUE),
+      median_pos_cpm = if (any(CPM > 0)) median(CPM[CPM > 0]) else 0,
+      prev           = mean(CPM > 0),
+      .groups = "drop"
+    )
+
+  by_group <- dflong %>%
+    dplyr::filter(!is.na(Host.genus), Host.genus != "", CPM > 0) %>%
+    dplyr::group_by(Host.genus, milk_tp) %>%
+    dplyr::summarise(n_pos = dplyr::n_distinct(Sample), .groups="drop") %>%
+    tidyr::pivot_wider(names_from = milk_tp, values_from = n_pos, values_fill = 0) %>%
+    dplyr::rename(n_pos_FALSE = `FALSE`, n_pos_TRUE = `TRUE`)
+
+  dplyr::left_join(base, by_group, by = "Host.genus")
+}
+
+passes_qc <- function(qc,
+  min_subjects_pos=5, min_samples_pos=5, min_total_cpm=200,
+  min_median_pos=5, min_nvotus=2, min_pos_per_group=3){
+  qc %>%
+    dplyr::mutate(pass =
+      (n_subjects_pos >= min_subjects_pos) &
+      (n_samples_pos  >= min_samples_pos)  &
+      (total_cpm      >= min_total_cpm)    &
+      (median_pos_cpm >= min_median_pos)   &
+      (n_vOTUs        >= min_nvotus)       &
+      (n_pos_TRUE     >= min_pos_per_group) &
+      (n_pos_FALSE    >= min_pos_per_group))
+}
+# Resultados que ya tienes limpios: res6_c, res12_c (con genus_short, q, estimate, etc.)
+qc6  <- qc_by_genus(df6)  %>% passes_qc()
+qc12 <- qc_by_genus(df12) %>% passes_qc()
+
+# Top en 12m tras QC (por ejemplo 20) + los con q<0.10 en 6m tras QC
+top12 <- res12_c %>%
+  dplyr::mutate(Host.genus = sub("(_A|_B|_Q|_AQ)$","", sub(".*g__","", taxon))) %>%
+  dplyr::inner_join(qc12 %>% dplyr::filter(pass), by="Host.genus") %>%
+  dplyr::arrange(q) %>% dplyr::slice_head(n=20) %>% dplyr::pull(genus_short)
+
+sig6  <- res6_c %>%
+  dplyr::mutate(Host.genus = sub("(_A|_B|_Q|_AQ)$","", sub(".*g__","", taxon))) %>%
+  dplyr::inner_join(qc6 %>% dplyr::filter(pass), by="Host.genus") %>%
+  dplyr::filter(q < 0.10) %>% dplyr::pull(genus_short)
+
+keep_pool <- union(top12, sig6)
+out6  <- fit_host_milk_cpm(df6,
+          min_subjects_pos=5, min_samples_pos=5, min_total_cpm=200,
+          min_median_pos=5, min_nvotus=2, cpm_floor=0,
+          top_k_by_prev=NULL,             # <- no recorta por top K
+          keep_set = keep_pool)           # <- fuerza el set común
+
+out12 <- fit_host_milk_cpm(df12,
+          min_subjects_pos=5, min_samples_pos=5, min_total_cpm=200,
+          min_median_pos=5, min_nvotus=2, cpm_floor=0,
+          top_k_by_prev=NULL,
+          keep_set = keep_pool)
+
+res6  <- out6$results
+res12 <- out12$results
+
+```
+
+
+
+
+
+
+```{r}
+library(dplyr)
+library(stringr)
+library(ggplot2)
+
+# --- limpieza + etiquetas únicas ---
+clean_res <- function(res){
+  res %>%
+    mutate(
+      genus_raw   = sub(".*g__", "", taxon),
+      genus_short = sub("(_A|_B|_Q|_AQ)$", "", genus_raw),
+      suf         = sub("^[^_]+", "", genus_raw),   # "", "_A", "_B", ...
+      sig_cat = case_when(q < 0.05 ~ "< 0.05",
+                          q < 0.10 ~ "< 0.10",
+                          TRUE     ~ "ns"),
+      dir = ifelse(estimate > 0, "Human milk↑", "Weaned↑"),
+      label = genus_short
+    )
+}
+
+res6_c  <- clean_res(res6)
+res12_c <- clean_res(res12)
+
+# Detecta colisiones de nombre corto y desambigua etiquetas con sufijo
+both <- bind_rows(res6_c %>% mutate(tp="6"),
+                  res12_c %>% mutate(tp="12"))
+dups <- both %>% count(genus_short, sort=TRUE) %>% filter(n>1) %>% pull(genus_short)
+res6_c  <- res6_c  %>% mutate(label = ifelse(genus_short %in% dups, paste0(genus_short, " ", suf), genus_short))
+res12_c <- res12_c %>% mutate(label = ifelse(genus_short %in% dups, paste0(genus_short, " ", suf), genus_short))
+
+# --- mismo set a plotear: unión del top15 de cada TP (por q) ---
+top6   <- res6_c  %>% arrange(q) %>% slice_head(n=15) %>% pull(genus_short)
+top12  <- res12_c %>% arrange(q) %>% slice_head(n=15) %>% pull(genus_short)
+show_g <- union(top6, top12)
+
+res6_p  <- res6_c  %>% filter(genus_short %in% show_g)
+res12_p <- res12_c %>% filter(genus_short %in% show_g)
+
+# --- orden común (primero 12m; añade los que solo están en 6m) ---
+ord12 <- res12_p %>% arrange(estimate) %>% pull(label) %>% unique()
+missing6 <- setdiff(res6_p$label, ord12)
+ord <- c(ord12, missing6)
+
+res6_p  <- res6_p  %>% mutate(label = factor(label, levels = ord))
+res12_p <- res12_p %>% mutate(label = factor(label, levels = ord))
+
+# --- estética ---
+sig_colors <- c("< 0.05" = "purple4", "< 0.10" = "#B09DDD", "ns" = "grey75")
+
+plot_forest_sig <- function(df, title){
+  ggplot(df %>% filter(!is.na(estimate)),
+         aes(x = estimate, y = label)) +
+    geom_vline(xintercept = 0, linetype = "dashed", linewidth = 1) +
+    geom_pointrange(aes(xmin = lo, xmax = hi,
+                        color = sig_cat, shape = dir, linetype = model),
+                    linewidth = 1.1, fatten = 3.8) +
+    scale_color_manual(values = sig_colors, name = "FDR", drop = FALSE) +
+    scale_shape_manual(values = c("Human milk↑" = 16, "Weaned↑" = 2), name = "", drop = FALSE) +
+    scale_linetype_manual(values = c("LMM"="solid","OLS-CR2"="dotdash"), name = "Model", drop = FALSE) +
+    labs(title = title,
+         subtitle = "Effect of human milk (CLR coef; 95% CI). Positive = higher with human milk",
+         x = "Human milk (TRUE) effect", y = "Host genus") +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "right", panel.grid.minor = element_blank())
+}
+
+# --- plotear ---
+p6  <- plot_forest_sig(res6_p,  "Human milk effect on host genus at 6 months")
+p12 <- plot_forest_sig(res12_p, "Human milk effect on host genus at 12 months")
+
+p6; p12
+```
+
+
+```{r}
+# QC por género y por grupo (como ya tienes)
+qc_by_genus <- function(dflong){
+  base <- dflong %>%
+    dplyr::filter(!is.na(Host.genus), Host.genus != "") %>%
+    dplyr::group_by(Host.genus) %>%
+    dplyr::summarise(
+      n_vOTUs        = dplyr::n_distinct(vOTUs),
+      n_subjects_pos = dplyr::n_distinct(subject[CPM > 0]),
+      n_samples_pos  = dplyr::n_distinct(Sample[CPM > 0]),
+      total_cpm      = sum(CPM, na.rm = TRUE),
+      median_pos_cpm = if (any(CPM > 0)) median(CPM[CPM > 0]) else 0,
+      prev           = mean(CPM > 0),
+      .groups = "drop"
+    )
+
+  by_group <- dflong %>%
+    dplyr::filter(!is.na(Host.genus), Host.genus != "", CPM > 0) %>%
+    dplyr::group_by(Host.genus, milk_tp) %>%
+    dplyr::summarise(n_pos = dplyr::n_distinct(Sample), .groups="drop") %>%
+    tidyr::pivot_wider(names_from = milk_tp, values_from = n_pos, values_fill = 0) %>%
+    dplyr::rename(n_pos_FALSE = `FALSE`, n_pos_TRUE = `TRUE`)
+
+  dplyr::left_join(base, by_group, by = "Host.genus")
+}
+
+passes_qc <- function(qc,
+  min_subjects_pos=5, min_samples_pos=5, min_total_cpm=200,
+  min_median_pos=5, min_nvotus=2, min_pos_per_group=3){
+  qc %>%
+    dplyr::mutate(pass =
+      (n_subjects_pos >= min_subjects_pos) &
+      (n_samples_pos  >= min_samples_pos)  &
+      (total_cpm      >= min_total_cpm)    &
+      (median_pos_cpm >= min_median_pos)   &
+      (n_vOTUs        >= min_nvotus)       &
+      (n_pos_TRUE     >= min_pos_per_group) &
+      (n_pos_FALSE    >= min_pos_per_group))
+}
+
+qc12 <- qc_by_genus(df12) %>% passes_qc()
+
+# Top-20 por prevalencia en 12m entre los que pasan QC (desempate por n_subjects_pos y total_cpm)
+top20_12 <- qc12 %>%
+  dplyr::filter(pass) %>%
+  dplyr::arrange(dplyr::desc(prev), dplyr::desc(n_subjects_pos), dplyr::desc(total_cpm)) %>%
+  dplyr::slice_head(n = 20) %>%
+  dplyr::pull(Host.genus)
+
+top20_12
+
+```
+
+
+
+
+
+```{r}
+# --- elegir EXACTAMENTE los de 12m (p.ej., top15 por q en 12m) ---
+top12_only <- res12_c %>% arrange(q) %>% slice_head(n = 12) %>% pull(genus_short)
+
+# filtrar ambos TPs a ese set fijo
+res12_p <- res12_c %>% filter(genus_short %in% top12_only)
+res6_p  <- res6_c  %>% filter(genus_short %in% top12_only)
+
+# --- orden común tomado de 12m ---
+ord <- res12_p %>% arrange(estimate) %>% pull(label) %>% unique()
+res12_p <- res12_p %>% mutate(label = factor(label, levels = ord))
+res6_p  <- res6_p  %>% mutate(label = factor(label, levels = ord))
+
+# (opcional) fijar niveles para evitar warnings de escalas
+lvl_sig <- c("< 0.05","< 0.10","ns")
+lvl_dir <- c("Human milk↑","Weaned↑")
+lvl_mod <- c("OLS-CR2")
+res12_p <- res12_p %>% mutate(sig_cat=factor(sig_cat, levels=lvl_sig),
+                              dir=factor(dir, levels=lvl_dir),
+                              model=factor(model, levels=lvl_mod))
+res6_p  <- res6_p  %>% mutate(sig_cat=factor(sig_cat, levels=lvl_sig),
+                              dir=factor(dir, levels=lvl_dir),
+                              model=factor(model, levels=lvl_mod))
+
+# --- plotear ---
+p6  <- plot_forest_sig(res6_p,  "Human milk effect on host genus at 6 months")
+p12 <- plot_forest_sig(res12_p, "Human milk effect on host genus at 12 months")
+
+p6; p12
+```
+
+
+```{r}
+# --- guardar
+outdir <- "~/Escritorio/MAMI_Paper_2024/FINAL_FIGURES/HOST_GENUS_FORESTS"
+dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+ggsave(file.path(outdir, "forest_hostgenus_final_6m.png"),  p6,  width = 8.5, height = 5, dpi = 300)
+ggsave(file.path(outdir, "forest_hostgenus_final_12m.png"), p12, width = 8.5, height = 5, dpi = 300)
+ggsave(file.path(outdir, "forest_hostgenus_final_6m.pdf"),  p6,  width = 8.5, height = 5)
+ggsave(file.path(outdir, "forest_hostgenus_final_12m.pdf"), p12, width = 8.5, height = 5)
+
+combo <- p6 + p12 + plot_layout(ncol = 2) + plot_annotation(tag_levels = "A")
+ggsave(file.path(outdir, "forest_hostgenus_final_6m_12m_combined.png"),
+       combo, width = 12, height = 5, dpi = 300)
+ggsave(file.path(outdir, "forest_hostgenus_final_6m_12m_combined.pdf"),
+       combo, width = 12, height = 5)
+```
+
+
+
+
+```{r}
+plot_forest_sig <- function(df, title, fdr_trend = 0.10){
+  df <- df %>% filter(!is.na(estimate))
+  n_test <- nrow(df)
+  has_sig <- any(df$q < fdr_trend, na.rm = TRUE)
+  has_trend <- any(df$q < 0.10 & df$q >= 0.05, na.rm = TRUE)
+
+  # paletas completas (aunque luego se reduzcan si no hay niveles)
+  sig_colors <- c("< 0.05" = "purple4", "< 0.10" = "#B09DDD", "ns" = "grey75")
+
+  # subtítulo dinámico
+  subtxt <- if (has_sig) {
+    "Effect of human milk (CLR coef; 95% CI). Positive = higher with human milk"
+  } else {
+    paste0("No genera reached FDR < ", fdr_trend,
+           " at this timepoint; grey CIs show estimates only (n=", n_test, ").")
+  }
+
+  p <- ggplot(df, aes(x = estimate, y = label)) +
+    geom_vline(xintercept = 0, linetype = "dashed", linewidth = 1) +
+    geom_pointrange(aes(xmin = lo, xmax = hi,
+                         color = sig_cat, shape = dir, linetype = model),
+                    linewidth = 1.1, fatten = 3.8) +
+    scale_color_manual(values = sig_colors, name = "FDR", drop = FALSE) +
+    scale_shape_manual(values = c("Human milk↑" = 16, "Weaned↑" = 2), name = "", drop = FALSE) +
+    scale_linetype_manual(values = c("LMM"="solid","OLS-CR2"="dotdash"),
+                          name = "Model", drop = FALSE) +
+    labs(title = title, subtitle = subtxt,
+         x = "Human milk (TRUE) effect", y = "Host genus") +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "right",
+          panel.grid.minor = element_blank())
+
+  # Etiqueta opcional si no hay significativos
+  if (!has_sig) {
+    p <- p + annotate("label", x = -Inf, y = Inf,
+                      label = paste0("No FDR <", fdr_trend),
+                      hjust = -0.05, vjust = 1.1, size = 3.5,
+                      label.size = 0, alpha = 0.9)
+  }
+  p
+}
+p6  <- plot_forest_sig(res6_p,  "Human milk effect on host genus at 6 months")
+p12 <- plot_forest_sig(res12_p, "Human milk effect on host genus at 12 months")
+p6; p12
+
+```
+
+
+
+```{r}
+fit_host_milk <- function(dflong){
+  # ... (tu conversión de milk_tp se queda igual)
+
+  host_long <- dflong %>%
+    filter(!is.na(Host.genus), Host.genus != "") %>%
+    mutate(Host.genus_base = sub("(_[A-Z]+)$", "", Host.genus)) %>%   # <- NUEVO
+    group_by(Sample, subject, Host.genus_base, milk_tp) %>%
+    summarise(CPM = sum(CPM), .groups = "drop")                       # <- sumas sublinajes
+
+  # Top por prevalencia usando el género base
+  keep <- host_long %>%
+    group_by(Host.genus_base) %>%
+    summarise(prev = mean(CPM > 0),
+              nsub = n_distinct(subject[CPM > 0]), .groups = "drop") %>%
+    arrange(desc(prev)) %>%
+    filter(nsub >= 10) %>%
+    slice_head(n = 30) %>%
+    pull(Host.genus_base)
+
+  host_long <- host_long %>% filter(Host.genus_base %in% keep)
+
+  # Wide → CLR (con columnas = Host.genus_base)
+  wide <- host_long %>%
+    select(Sample, Host.genus_base, CPM) %>%
+    pivot_wider(names_from = Host.genus_base, values_from = CPM, values_fill = 0)
+
+  mat <- as.matrix(wide[, -1, drop = FALSE]); rownames(mat) <- wide$Sample
+  prop <- sweep(mat, 1, rowSums(mat) + 1e-12, "/"); prop[prop == 0] <- 1e-6
+  logp <- log(prop); clr <- sweep(logp, 1, rowMeans(logp), "-")
+
+  meta <- host_long %>% distinct(Sample, subject, milk_tp)
+  dfc  <- as.data.frame(clr) %>% tibble::rownames_to_column("Sample") %>%
+    left_join(meta, by = "Sample")
+
+  fit_one <- function(col){
+    ff <- reformulate("milk_tp", response = paste0("`", col, "`"))
+    out <- try({
+      m <- lmer(update(ff, . ~ . + (1 | subject)), data = dfc,
+                control = lmerControl(optimizer = "bobyqa",
+                                      optCtrl = list(maxfun = 2e5)))
+      if (isSingular(m, 1e-4)) stop("singular")
+      broom.mixed::tidy(m, effects = "fixed") %>%
+        filter(term == "milk_tpTRUE") %>%
+        transmute(taxon = col, estimate, std.error, p.value, model = "LMM")
+    }, silent = TRUE)
+    if (inherits(out, "try-error")) {
+      lmfit <- lm(ff, data = dfc)
+      vc <- clubSandwich::vcovCR(lmfit, cluster = dfc$subject, type = "CR2")
+      co <- clubSandwich::coef_test(lmfit, vcov = vc)
+      tibble(taxon = col,
+             estimate  = co["milk_tpTRUE","beta"],
+             std.error = co["milk_tpTRUE","SE"],
+             p.value   = co["milk_tpTRUE","p_Satt"],
+             model = "OLS-CR2")
+    } else out
+  }
+
+  map_dfr(colnames(clr), fit_one) %>%
+    mutate(q  = p.adjust(p.value, "BH"),
+           lo = estimate - 1.96 * std.error,
+           hi = estimate + 1.96 * std.error) %>%
+    arrange(q)
+}
+
+clean_res <- function(res){
+  res %>%
+    mutate(
+      genus_short = taxon,                 # ya viene colapsado
+      sig_cat = case_when(q < 0.05 ~ "< 0.05",
+                          q < 0.10 ~ "< 0.10",
+                          TRUE     ~ "ns"),
+      dir = ifelse(estimate > 0, "Human milk↑", "Weaned↑"),
+      label = genus_short
+    )
+}
+
+qc_by_genus <- function(dflong){
+  base <- dflong %>%
+    filter(!is.na(Host.genus), Host.genus != "") %>%
+    mutate(Host.genus_base = sub("(_[A-Z]+)$", "", Host.genus)) %>%
+    group_by(Host.genus_base) %>%
+    summarise(
+      n_vOTUs        = n_distinct(vOTUs),
+      n_subjects_pos = n_distinct(subject[CPM > 0]),
+      n_samples_pos  = n_distinct(Sample[CPM > 0]),
+      total_cpm      = sum(CPM, na.rm = TRUE),
+      median_pos_cpm = if (any(CPM > 0)) median(CPM[CPM > 0]) else 0,
+      prev           = mean(CPM > 0),
+      .groups = "drop"
+    ) %>%
+    rename(Host.genus = Host.genus_base)
+
+  by_group <- dflong %>%
+    filter(!is.na(Host.genus), Host.genus != "", CPM > 0) %>%
+    mutate(Host.genus_base = sub("(_[A-Z]+)$", "", Host.genus)) %>%
+    group_by(Host.genus_base, milk_tp) %>%
+    summarise(n_pos = n_distinct(Sample), .groups="drop") %>%
+    pivot_wider(names_from = milk_tp, values_from = n_pos, values_fill = 0) %>%
+    rename(Host.genus = Host.genus_base,
+           n_pos_FALSE = `FALSE`, n_pos_TRUE = `TRUE`)
+
+  left_join(base, by_group, by = "Host.genus")
+}
+
+```
+
+
+
+```{r}
+both <- bind_rows(res6_p %>% mutate(tp = "6 m"),
+                  res12_p %>% mutate(tp = "12 m")) %>%
+  mutate(label = factor(label, levels = ord),
+         tp = factor(tp, levels = c("6 m","12 m")),
+         sig_cat = factor(sig_cat, levels = c("< 0.05","< 0.10","ns")),
+         dir = factor(dir, levels = c("Human milk↑","Weaned↑")),
+         model = factor(model, levels = c("LMM","OLS-CR2")))
+
+sig_colors <- c("< 0.05"="purple4","< 0.10"="#B09DDD","ns"="grey75")
+
+p_facet <- ggplot(both, aes(x = estimate, y = label)) +
+  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 1) +
+  geom_pointrange(aes(xmin = lo, xmax = hi, color = sig_cat, shape = dir, linetype = model),
+                  linewidth = 1.1, fatten = 3.8) +
+  scale_color_manual(values = sig_colors, name = "FDR", drop = FALSE) +
+  scale_shape_manual(values = c("Human milk↑"=16, "Weaned↑"=2), name = "", drop = FALSE) +
+  scale_linetype_manual(values = c("LMM"="solid","OLS-CR2"="dotdash"), name = "Model", drop = FALSE) +
+  coord_cartesian(xlim = c(-lim, lim)) +
+  facet_wrap(~ tp, ncol = 2, scales = "fixed",
+             labeller = as_labeller(function(x) paste0("Human milk effect at ", x))) +
+  labs(title = "Human milk effect on host-associated genera",
+       x = "Human milk (TRUE) effect (CLR units)", y = "Host genus") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "right", panel.grid.minor = element_blank())
+
+p_facet
+
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# 1) Une 6m y 12m y fija un orden común (tomado de 12m)
+res6_p <- res6_p %>% mutate(tp = "6 m")
+res12_p <- res12_p %>% mutate(tp = "12 m")
+
+ord <- res12_p %>% arrange(estimate) %>% pull(label) %>% unique()
+both <- bind_rows(res6_p, res12_p) %>%
+  mutate(label = factor(label, levels = ord),
+         tp = factor(tp, levels = c("6 m","12 m")),
+         sig_cat = factor(sig_cat, levels = c("< 0.05","< 0.10","ns")),
+         dir = factor(dir, levels = c("Human milk↑","Weaned↑")),
+         model = factor(model, levels = c("OLS-CR2")))
+
+# 2) Mismos límites en X para ambos paneles (simétricos alrededor de 0)
+lim <- max(abs(c(both$lo, both$hi)), na.rm = TRUE) * 1.05
+
+# 3) Paleta de significancia (puedes cambiar por la que usabas)
+sig_colors <- c("< 0.05" = "purple4", "< 0.10" = "#B09DDD", "ns" = "grey75")
+
+# 4) Subtítulo dinámico por panel (opcional)
+sub_by_tp <- both %>%
+  group_by(tp) %>%
+  summarise(has_sig = any(q < 0.10, na.rm = TRUE), .groups="drop")
+sub_txt <- function(tp_label){
+  if (sub_by_tp$has_sig[sub_by_tp$tp == tp_label]) {
+    "Effect of human milk (CLR coef; 95% CI). Positive = higher with human milk"
+  } else {
+    "No genera reached FDR < 0.10; grey CIs show estimates only."
+  }
+}
+
+# 5) Plot facetado
+p_forest <- ggplot(both %>% filter(!is.na(estimate)),
+                   aes(x = estimate, y = label)) +
+  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 1) +
+  geom_pointrange(aes(xmin = lo, xmax = hi,
+                      color = sig_cat, shape = dir, linetype = model),
+                  linewidth = 1.1, fatten = 3.8) +
+  scale_color_manual(values = sig_colors, name = "FDR", drop = FALSE) +
+  scale_shape_manual(values = c("Human milk↑" = 16, "Weaned↑" = 2), name = "", drop = FALSE) +
+  scale_linetype_manual(values = c("OLS-CR2"="dotdash"),
+                        name = "Model", drop = FALSE) +
+  coord_cartesian(xlim = c(-lim, lim)) +
+  facet_wrap(~ tp, ncol = 2, scales = "fixed",
+             labeller = as_labeller(function(x) paste0("Human milk effect at ", x))) +
+  labs(x = "Human milk (TRUE) effect (CLR units)", y = "Host genus",
+       title = "Human milk effect on host-associated genera at 6 and 12 months") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+
+p_forest
+```
+
+
+
+
+
+```{r}
+
+library(dplyr)
+# === QC por género base en un timepoint ===
+qc_host_genus <- function(dflong,
+                          min_votus = 2,
+                          min_samples_pos = 8,
+                          min_subjects_pos = 5,
+                          min_total_cpm = 200,
+                          min_median_pos = 5,
+                          min_pos_per_group = 3,
+                          max_single_votu_share = 0.90) {
+
+  # stats básicos
+  base <- dflong %>%
+    filter(!is.na(Host.genus), Host.genus != "") %>%
+    group_by(Host.genus) %>%
+    summarise(
+      n_vOTUs        = n_distinct(vOTUs),
+      n_subjects_pos = n_distinct(subject[CPM > 0]),
+      n_samples_pos  = n_distinct(Sample[CPM > 0]),
+      total_cpm      = sum(CPM, na.rm = TRUE),
+      median_pos_cpm = if (any(CPM > 0)) median(CPM[CPM > 0]) else 0,
+      .groups = "drop"
+    )
+
+  # presencia por grupo de leche
+  by_group <- dflong %>%
+    filter(!is.na(Host.genus), Host.genus != "", CPM > 0) %>%
+    group_by(Host.genus, milk_tp) %>%
+    summarise(n_pos = n_distinct(Sample), .groups="drop") %>%
+    tidyr::pivot_wider(names_from = milk_tp, values_from = n_pos, values_fill = 0) %>%
+    rename(n_pos_FALSE = `FALSE`, n_pos_TRUE = `TRUE`)
+
+  # ¿dominado por un solo vOTU?
+  dom <- dflong %>%
+    group_by(Host.genus, vOTUs) %>%
+    summarise(cpm = sum(CPM), .groups="drop_last") %>%
+    mutate(tot_g = sum(cpm)) %>%
+    summarise(max_share = max(cpm) / first(tot_g), .groups="drop")
+
+  qc <- base %>%
+    left_join(by_group, by="Host.genus") %>%
+    left_join(dom, by="Host.genus") %>%
+    mutate(
+      n_pos_TRUE  = coalesce(n_pos_TRUE, 0L),
+      n_pos_FALSE = coalesce(n_pos_FALSE, 0L),
+      pass = (n_vOTUs >= min_votus) &
+             (n_samples_pos  >= min_samples_pos) &
+             (n_subjects_pos >= min_subjects_pos) &
+             (total_cpm      >= min_total_cpm) &
+             (median_pos_cpm >= min_median_pos) &
+             (n_pos_TRUE     >= min_pos_per_group) &
+             (n_pos_FALSE    >= min_pos_per_group) &
+             (max_share <= max_single_votu_share)
+    )
+  qc
+}
+
+# === construir set de géneros a mantener en las FIGURAS ===
+# Nota: usa tus data frames de 6m y 12m ya estandarizados a género base:
+# df6, df12 (con columnas Sample, subject, Host.genus, vOTUs, CPM, milk_tp, ...)
+
+qc6  <- qc_host_genus(df6,
+                      min_votus = 2,
+                      min_samples_pos = 8,
+                      min_subjects_pos = 5,
+                      min_total_cpm = 200,
+                      min_median_pos = 5,
+                      min_pos_per_group = 3,
+                      max_single_votu_share = 0.90)
+
+qc12 <- qc_host_genus(df12,
+                      min_votus = 2,
+                      min_samples_pos = 8,
+                      min_subjects_pos = 5,
+                      min_total_cpm = 200,
+                      min_median_pos = 5,
+                      min_pos_per_group = 3,
+                      max_single_votu_share = 0.90)
+
+# Estrategia estricta: que pasen QC en AMBOS TPs
+keep_qc <- intersect(qc6 %>% filter(pass) %>% pull(Host.genus),
+                     qc12 %>% filter(pass) %>% pull(Host.genus))
+
+# Fíltralo en los resultados (no recalcula q; solo quita del plot)
+res6_p  <- res6_p  %>% filter(label %in% keep_qc)
+res12_p <- res12_p %>% filter(label %in% keep_qc)
+
+# (opcional) si prefieres ser menos estricto:
+# keep_qc <- union(qc6 %>% filter(pass) %>% pull(Host.genus),
+#                  qc12 %>% filter(pass) %>% pull(Host.genus))
+
+lim   <- max(abs(c(res6_p$lo, res6_p$hi, res12_p$lo, res12_p$hi)), na.rm = TRUE) * 1.05
+xlims <- c(-lim, lim)
+
+p6  <- plot_forest_sig_std(res6_p,  "Human milk effect at 6 months",
+                           xlim = xlims, lang = "en")
+p12 <- plot_forest_sig_std(res12_p, "Human milk effect at 12 months",
+                           xlim = xlims, lang = "en")
+
+p6; p12
+
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# --- 1) Elegir EXACTAMENTE 12 de 12m (top-12 por q), excluyendo opcionalmente algunos ---
+target_K <- 12
+drop_gen <- c("Cronobacter")  # deja c() si no quieres excluir nada
+
+top12_all <- res12_c %>%
+  arrange(q) %>% pull(label) %>% unique()
+
+top12_12m <- setdiff(top12_all, drop_gen)
+if (length(top12_12m) < target_K) {
+  need    <- target_K - length(top12_12m)
+  fillers <- setdiff(top12_all, c(top12_12m, drop_gen))[1:need]
+  top12_12m <- c(top12_12m, fillers)
+} else {
+  top12_12m <- top12_12m[1:target_K]
+}
+
+# --- 2) Forzar ese set en 6m y 12m, y fijar orden por efecto en 12m ---
+res12_p <- res12_c %>% filter(label %in% top12_12m)
+res6_p  <- res6_c  %>% filter(label %in% top12_12m)
+
+ord <- res12_p %>% arrange(estimate) %>% pull(label) %>% unique()
+res12_p <- res12_p %>% mutate(label = factor(label, levels = ord), tp = "12 m")
+res6_p  <- res6_p  %>% mutate(label = factor(label, levels = ord), tp = "6 m")
+
+# --- 3) Unir para facet y normalizar niveles de leyendas ---
+both <- bind_rows(res6_p, res12_p) %>%
+  mutate(
+    tp      = factor(tp, levels = c("6 m","12 m")),
+    sig_cat = factor(sig_cat, levels = c("< 0.05","< 0.10","ns")),
+    dir     = factor(dir,     levels = c("Human milk↑","Weaned↑")),
+    model   = factor(model,   levels = c("LMM","OLS-CR2"))
+  )
+
+# --- 4) Mismo límite X (simétrico) ---
+lim <- max(abs(c(both$lo, both$hi)), na.rm = TRUE) * 1.05
+
+# --- 5) Paleta y facet como tu ejemplo ---
+sig_colors <- c("< 0.05" = "purple4", "< 0.10" = "#B09DDD", "ns" = "grey75")
+
+p_forest <- ggplot(both %>% filter(!is.na(estimate)),
+                   aes(x = estimate, y = label)) +
+  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 1) +
+  geom_pointrange(aes(xmin = lo, xmax = hi,
+                      color = sig_cat, shape = dir, linetype = model),
+                  linewidth = 1.1, fatten = 3.8) +
+  scale_color_manual(values = sig_colors, name = "FDR", drop = FALSE) +
+  scale_shape_manual(values = c("Human milk↑" = 16, "Weaned↑" = 2), name = "", drop = FALSE) +
+  scale_linetype_manual(values = c("LMM"="solid","OLS-CR2"="dotdash"),
+                        name = "Model", drop = FALSE) +
+  coord_cartesian(xlim = c(-lim, lim)) +
+  facet_wrap(~ tp, ncol = 2, scales = "fixed",
+             labeller = as_labeller(function(x) paste0("Human milk effect at ", x))) +
+  labs(x = "Human milk (TRUE) effect (CLR units)", y = "Host genus",
+       title = "Human milk effect on host-associated genera at 6 and 12 months") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+
+p_forest
+
+
+```
+
+
+
+
+
+
+```{r}
+# géneros seleccionados (los 12 de 12 m)
+chosen <- levels(res12_p$label)
+
+# géneros no estimables en 6 m
+not_estimable_6 <- setdiff(chosen, as.character(res6_p$label[!is.na(res6_p$estimate)]))
+not_estimable_6
+
+# razón probable: presencia por grupo (6 m)
+df6_reason <- df6_filt %>%
+  dplyr::filter(Host.genus %in% not_estimable_6) %>%
+  dplyr::group_by(Host.genus) %>%
+  dplyr::summarise(
+    n_samples_pos  = dplyr::n_distinct(Sample[CPM > 0]),
+    n_pos_TRUE     = dplyr::n_distinct(Sample[CPM > 0 & milk_tp]),
+    n_pos_FALSE    = dplyr::n_distinct(Sample[CPM > 0 & !milk_tp]),
+    total_cpm      = sum(CPM),
+    .groups = "drop"
+  )
+df6_reason
+```
+
+
+
+
+
+
+```{r}
+# Reforzar set y orden por 12 m
+ord     <- res12_p %>% arrange(estimate) %>% pull(label) %>% unique()
+res12_p <- res12_p %>% mutate(label = factor(label, levels = ord), tp = "12 m")
+res6_p  <- res6_p  %>% mutate(label = factor(label, levels = ord), tp = "6 m")
+
+both <- bind_rows(res6_p, res12_p) %>%
+  mutate(tp=factor(tp, levels=c("6 m","12 m")),
+         sig_cat=factor(sig_cat, levels=c("< 0.05","< 0.10","ns")),
+         dir=factor(dir, levels=c("Human milk↑","Weaned↑")),
+         model=factor(model, levels=c("LMM","OLS-CR2")))
+
+lim <- max(abs(c(both$lo, both$hi)), na.rm = TRUE) * 1.05
+sig_colors <- c("< 0.05"="purple4","< 0.10"="#B09DDD","ns"="grey75")
+
+p_forest <- ggplot(both %>% filter(!is.na(estimate)),
+                   aes(x=estimate, y=label)) +
+  geom_vline(xintercept=0, linetype="dashed", linewidth=1) +
+  geom_pointrange(aes(xmin=lo, xmax=hi, color=sig_cat, shape=dir, linetype=model),
+                  linewidth=1.1, fatten=3.8) +
+  scale_color_manual(values=sig_colors, name="FDR", drop=FALSE) +
+  scale_shape_manual(values=c("Human milk↑"=16,"Weaned↑"=2), name="", drop=FALSE) +
+  scale_linetype_manual(values=c("LMM"="solid","OLS-CR2"="dotdash"), name="Model", drop=FALSE) +
+  coord_cartesian(xlim=c(-lim, lim)) +
+  facet_wrap(~ tp, ncol=2, scales="fixed",
+             labeller=as_labeller(function(x) paste0("Human milk effect at ", x))) +
+  labs(x="Human milk (TRUE) effect (CLR units)", y="Host genus",
+       title="Human milk effect on host-associated genera at 6 and 12 months") +
+  theme_minimal(base_size=12) +
+  theme(legend.position="right", panel.grid.minor=element_blank())
+
+# Si añadiste 'ghost_6', podrías hacer:
+# p_forest <- p_forest + geom_text(data=ghost_6, aes(x=x,y=label), label="NE",
+#                                  color="grey60", size=3, fontface="italic")
+
+p_forest
+```
+
+
+
+
+```{r}
+res6  <- fit_host_milk(df6)
+res12 <- fit_host_milk(df12)
+
+res6_c  <- clean_res(res6)
+res12_c <- clean_res(res12)
+
+stopifnot(nrow(res6_c) > 0, nrow(res12_c) > 0)
+
+```
+
+library(dplyr)
+library(ggplot2)
+
+# ejemplo de QC suave por timepoint (previo a elegir top12)
+qc6  <- qc_host_genus(df6,  min_votus=1, min_samples_pos=3, min_subjects_pos=2,
+                      min_total_cpm=50, min_median_pos=1, min_pos_per_group=1,
+                      max_single_votu_share=0.99)
+qc12 <- qc_host_genus(df12, min_votus=1, min_samples_pos=3, min_subjects_pos=2,
+                      min_total_cpm=50, min_median_pos=1, min_pos_per_group=1,
+                      max_single_votu_share=0.99)
+
+keep_union <- union(qc6$Host.genus[qc6$pass], qc12$Host.genus[qc12$pass])
+
+# limitar res12_c a los que pasan QC antes de tomar los top-12
+res12_c <- res12_c %>% dplyr::filter(label %in% keep_union)
+
+# ========= 1) Top-12 del TP=12 m (opcional: excluir géneros) =========
+target_K <- 10
+drop_gen <- c()     # deja c() si no quieres excluir nada
+
+top12_all <- res12_c %>% arrange(q) %>% pull(label) %>% unique()
+top12_12m <- setdiff(top12_all, drop_gen)
+if (length(top12_12m) < target_K) {
+  need    <- target_K - length(top12_12m)
+  fillers <- setdiff(top12_all, c(top12_12m, drop_gen))[1:need]
+  top12_12m <- c(top12_12m, fillers)
+} else {
+  top12_12m <- top12_12m[1:target_K]
+}
+
+# ========= 2) Forzar mismo set en 6 m y 12 m; ordenar por 12 m =========
+res12_p <- res12_c %>% filter(label %in% top12_12m)
+res6_p  <- res6_c  %>% filter(label %in% top12_12m)
+
+ord <- res12_p %>% arrange(estimate) %>% pull(label) %>% unique()
+res12_p <- res12_p %>% mutate(label = factor(label, levels = ord), tp = "12 m")
+res6_p  <- res6_p  %>% mutate(label = factor(label, levels = ord), tp = "6 m")
+
+# ========= 3) Unir para facet y normalizar niveles de leyenda =========
+both <- bind_rows(res6_p, res12_p) %>%
+  mutate(
+    tp      = factor(tp, levels = c("6 m","12 m")),
+    sig_cat = factor(sig_cat, levels = c("< 0.05","< 0.10","ns")),
+    dir     = factor(dir,     levels = c("Human milk↑","Weaned↑")),
+    model   = factor(model,   levels = c("OLS-CR2"))
+  )
+
+# ========= 4) Eje X compartido (simétrico) =========
+lim  <- max(abs(c(both$lo, both$hi)), na.rm = TRUE) * 1.05
+brks <- pretty(c(-lim, lim))
+
+# ========= 5) Subtítulo dinámico por panel (dice si hay FDR<0.10 y n estimados) =========
+sub_by_tp <- both %>%
+  group_by(tp) %>%
+  summarise(n = sum(!is.na(estimate)),
+            any_sig = any(q < 0.10, na.rm = TRUE), .groups = "drop")
+lab_fun <- function(x){
+  sapply(x, function(tp){
+    row <- sub_by_tp[sub_by_tp$tp == tp,]
+    if (row$any_sig) sprintf("Human milk effect at %s (n=%d)", tp, row$n)
+    else sprintf("Human milk effect at %s — No FDR < 0.10 (n=%d)", tp, row$n)
+  })
+}
+
+# ========= 6) (Opcional) marcar “NE” para géneros no estimables en 6 m =========
+missing6 <- setdiff(levels(res12_p$label),
+                    as.character(res6_p$label[!is.na(res6_p$estimate)]))
+ghost_6 <- data.frame(
+  label = factor(missing6, levels = levels(res12_p$label)),
+  tp    = factor("6 m", levels = c("6 m","12 m")),
+  x     = 0
+)
+
+# ========= 7) Plot facetado =========
+sig_colors <- c("< 0.05"="purple4","< 0.10"="#B09DDD","ns"="grey75")
+
+p_forest <- ggplot(both %>% filter(!is.na(estimate)),
+                   aes(x = estimate, y = label)) +
+  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 1) +
+  geom_pointrange(aes(xmin = lo, xmax = hi,
+                      color = sig_cat, shape = dir, linetype = model),
+                  linewidth = 1.1, fatten = 3.8) +
+  scale_color_manual(values = sig_colors, name = "FDR", drop = FALSE) +
+  scale_shape_manual(values = c("Human milk↑"=16,"Weaned↑"=2), name = "", drop = FALSE) +
+  scale_linetype_manual(values = c("OLS-CR2"="dotdash"),
+                        name = "Model", drop = FALSE) +
+  scale_x_continuous(breaks = brks, limits = c(min(brks), max(brks))) +
+  facet_wrap(~ tp, ncol = 2, scales = "fixed",
+             labeller = as_labeller(lab_fun)) +
+  labs(x = "Human milk (TRUE) effect (CLR units)", y = "Host genus",
+       title = "Human milk effect on host-associated genera at 6 and 12 months") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+
+# Añade las etiquetas “NE” si hay no-estimables en 6 m
+if (nrow(ghost_6) > 0) {
+  p_forest <- p_forest +
+    geom_text(data = ghost_6, aes(x = x, y = label),
+              label = "NE", color = "grey60", size = 3,
+              fontface = "italic")
+}
+
+p_forest
+ggsave("~/Escritorio/MAMI_Paper_2024/FINAL_FIGURES/HOST_GENUS_FORESTS/forest_hostgenus_6m_12m_top12_from12m.png", p_forest, width = 12, height = 6, dpi = 300)
+
+p_forest
+ggsave("~/Escritorio/MAMI_Paper_2024/FINAL_FIGURES/HOST_GENUS_FORESTS/forest_hostgenus_6m_12m_top12_from12m.pdf", p_forest, width = 12, height = 6, dpi = 300)
+```
+
+
+
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(writexl)
+
+# --- 0) set de géneros y orden (si no existen en el entorno) ---
+if (!exists("top12_12m")) {
+  top12_all <- res12_c %>% arrange(q) %>% pull(label) %>% unique()
+  target_K  <- 12
+  top12_12m <- head(top12_all, target_K)
+}
+if (!exists("ord")) {
+  ord <- res12_c %>% filter(label %in% top12_12m) %>%
+    arrange(estimate) %>% pull(label) %>% unique()
+}
+
+# --- 1) preparar tablas por TP (tomando SIEMPRE el mismo set de 12) ---
+t6  <- res6_c  %>% filter(label %in% top12_12m)  %>% mutate(tp = "6 m")
+t12 <- res12_c %>% filter(label %in% top12_12m) %>% mutate(tp = "12 m")
+
+# completar filas NE si falta alguno en 6 m o 12 m
+tpl <- expand.grid(label = ord, tp = c("6 m","12 m"), stringsAsFactors = FALSE)
+both_full <- tpl %>%
+  left_join(bind_rows(t6, t12), by = c("label","tp"))
+
+# --- 2) columnas finales + formatos ---
+fmt_num <- function(x, d=2) ifelse(is.na(x), NA, sprintf(paste0("%.", d, "f"), x))
+dir_text <- function(b) ifelse(is.na(b), NA,
+                               ifelse(b > 0, "Human milk↑", "Weaned↑"))
+sig_band <- function(q){
+  if (is.na(q)) return(NA_character_)
+  if (q < 0.05) "<0.05" else if (q < 0.10) "<0.10" else "ns"
+}
+
+tab <- both_full %>%
+  mutate(
+    Model = model,
+    beta  = estimate,
+    lo95  = lo,
+    hi95  = hi,
+    p     = p.value,
+    q     = q,
+    dir   = dir_text(beta),
+    sig   = vapply(q, sig_band, character(1))
+  ) %>%
+  select(tp, label, Model, beta, lo95, hi95, p, q, sig, dir) %>%
+  mutate(
+    across(c(beta, lo95, hi95), ~ fmt_num(.x, 2)),
+    across(c(p, q),            ~ fmt_num(.x, 3))
+  ) %>%
+  arrange(factor(tp, levels = c("12 m","6 m")), factor(label, levels = ord))
+
+# --- 3) nombres bonitos de columnas ---
+colnames(tab) <- c("Timepoint", "Host genus", "Model",
+                   "Beta", "CI95% lo", "CI95% hi", "p", "q (FDR)", "sig", "Direction")
+
+# --- 4) guardar ---
+outdir <- "~/Escritorio/MAMI_Paper_2024/STATISTICAL_RESULTS_TABLES"
+dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+write.csv(tab, file.path(outdir, "host_genus_effects_6m_12m.csv"), row.names = FALSE)
+writexl::write_xlsx(list("Host_genus_effects" = tab),
+                    path = file.path(outdir, "host_genus_effects_6m_12m.xlsx"))
+
+# (opcional) versión wide con 6m y 12m en columnas
+tab_wide <- tab %>%
+  pivot_wider(names_from = Timepoint,
+              values_from = c(Beta, `CI95% lo`, `CI95% hi`, p, `q (FDR)`, sig, Direction),
+              names_sep = " | ") %>%
+  arrange(factor(`Host genus`, levels = ord))
+writexl::write_xlsx(list("Long" = tab, "Wide" = tab_wide),
+                    path = file.path(outdir, "host_genus_effects_6m_12m_LONG_and_WIDE.xlsx"))
+```
+
