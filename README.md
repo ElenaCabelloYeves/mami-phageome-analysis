@@ -4,7 +4,7 @@
 
 This repository contains the analysis workflow used to reconstruct and analyze the infant gut phageome from shotgun metagenomic sequencing data of the MAMI cohort.
 
-### Workflow summary
+### ✨ Workflow summary ✨
 
 1. **Quality control and trimming**
    Raw reads were quality-checked using FastQC and summarized with MultiQC.
