@@ -1,6 +1,6 @@
 # MAMI phageome analysis workflow
 
-## Overview
+## ✨ Overview ✨
 
 This repository contains the analysis workflow used to reconstruct and analyze the infant gut phageome from shotgun metagenomic sequencing data of the MAMI cohort.
 
@@ -8,7 +8,7 @@ The code accompanies the manuscript:
 
 “Breastfeeding and maternal sources shape infant gut phage communities during the first year of life.”
 
-### ✨ Workflow summary ✨
+## Workflow summary 
 
 1. **Quality control and trimming**
    Raw reads were quality-checked using FastQC and summarized with MultiQC.
@@ -32,7 +32,7 @@ The code accompanies the manuscript:
    Diversity metrics, ordinations, and statistical analyses were performed in R.
 
 
-**Data availability**
+## **Data availability**
 
 The final curated catalogue of viral operational taxonomic units (vOTUs) is available at the European Nucleotide Archive (ENA):
 
