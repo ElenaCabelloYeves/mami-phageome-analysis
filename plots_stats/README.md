@@ -92,7 +92,7 @@ Additional analyses:
 
 **Objective:** Assess environmental and perinatal influences on phageome structuring.
 
-# Community-Level Effects
+**Community-Level Effects**
 
 PERMANOVA by time point for:
 - Feeding mode (breastfed / partial / none)
@@ -105,7 +105,7 @@ Delivery-related variables:
 
 Inclusion of covariates where applicable
 
-# Feature-Level Effects
+**Feature-Level Effects**
 
 Genus-level CLR transformations with Linear Mixed Models (LMM)
 MaAsLin2 multivariable models
@@ -117,26 +117,6 @@ MaAsLin2 multivariable models
 - Prevalence and abundance trajectories
 (Figure 5)
 
-## 6️⃣ Supplementary & Robustness Analyses
-
-**Objective:** Ensure robustness and reproducibility of findings.
-
-Sensitivity to filtering thresholds:
-- Coverage
-- Depth
-- CPM presence definitions
-
-Alternative normalization strategies (when applicable)
-Alternative distance metrics (optional)
-Additional stratifications
-Supplemental figures (Figures S1–Sx)
-
-## 🧪 Reproducibility Notes
-
-- All analyses use CPM-normalized abundance matrices.
-- Presence is defined as CPM > 0 unless otherwise stated.
-- Statistical tests account for repeated measures when required.
-- Scripts are organized to mirror manuscript figure structure.
 
 ## 📦 R packages used
 
