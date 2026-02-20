@@ -29,7 +29,6 @@ Shared and unique vOTUs across ecosystems:
 - Dyad-level sharing
 - Stratification by delivery mode 
 - Mother-Infant UpSet plots
-- 
 (Figure 1)
 
 ## 2️⃣ Dominance, Persistence & Core Definitions
