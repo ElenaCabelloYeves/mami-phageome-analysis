@@ -136,4 +136,9 @@ A script like `install_packages.R` can be added to help install all dependencies
 
 ## 📁 File examples
 
+- Fig1-2_Transmission_vOTUs.Rmd: contains Upset plots of vOTUs in mother-infant gut and milk used to make Figures 1-2 
+- Fig2_abundance_threshold.Rmd: to plot a threshold for the most dominant vOTUs. 
+- Fig2_taxonomy_ratios.Rmd: phage-bacteria taxonomies and ratios. 
+- Fig3_Phage-bacteria-alpha_beta_diversity.Rmd
+- singletons.Rmd: to calculate number of singletons
 
