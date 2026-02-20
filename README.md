@@ -1,4 +1,4 @@
-# MAMI phageome analysis workflow
+# Mother–Infant gut phageome metagenomic workflow (MAMI cohort)
 
 ## ✨ Overview ✨
 
