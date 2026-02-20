@@ -1,0 +1,318 @@
+---
+title: "vOTUs sharing among groups"
+output: html_document
+date: "2026-02-19"
+---
+
+```{r}
+# Package installation (run once)
+
+# Ensure remotes is installed
+install.packages("remotes")
+
+# Update ggplot2 from CRAN
+install.packages("ggplot2")
+
+# Install the latest stable version of ComplexUpset
+remotes::install_github("krassowski/complex-upset")
+```
+
+```{r}
+# Load required libraries ------------------------------------
+library(dplyr)
+library(tidyr)
+library(readr)
+library(ggplot2)
+library(ComplexUpset)
+library(here)
+
+# Input file -------------------------------------------------
+df <- read_csv(
+  here("data", "results_with_metadata.csv"),
+  show_col_types = FALSE
+)
+
+# FIGURE: UpSet across compartments + infant timepoints (all vOTUs)
+# Presence is defined as CPM > 0 in at least one sample of each group
+df_sets_timepoints <- df %>%
+  filter(CPM > 0) %>%                           # keep only present vOTUs
+  mutate(group = case_when(
+    bodysite == "breastmilk"                                   ~ "Human_milk",
+    mother_infant == "mother"  & bodysite == "stool"           ~ "Mother_stool",
+    mother_infant == "infant" & timepoint_months == 0.25       ~ "Infant_1W",
+    mother_infant == "infant" & timepoint_months == 1          ~ "Infant_1M",
+    mother_infant == "infant" & timepoint_months == 6          ~ "Infant_6M",
+    mother_infant == "infant" & timepoint_months == 12         ~ "Infant_12M",
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(group)) %>%                     # remove unclassified
+  select(vOTUs, subject, group) %>%             # only relevant columns
+  distinct() %>%                                # remove duplicates
+  group_by(vOTUs, group) %>%
+  summarise(present = 1, .groups = "drop") %>%
+  pivot_wider(
+    names_from = group,
+    values_from = present,
+    values_fill = 0                             # presence/absence matrix
+  )
+
+# Color palette
+timepoint_colors <- c(
+  "Infant_1W"    = "blue",
+  "Infant_1M"    = "darkgreen",
+  "Infant_6M"    = "mediumaquamarine",
+  "Infant_12M"   = "gold",
+  "Mother_stool" = "purple4",
+  "Human_milk"   = "pink"
+)
+
+# Clean themes -------------------------------------------------------
+# - Remove the bottom "intersection" codes by blanking the x-axis
+#   of intersections_matrix_sizes
+# - Larger text overall (SVG-friendly)
+upset_themes_clean <- list(
+  intersections_matrix = theme_bw() +
+    theme(
+      axis.text.x  = element_blank(),
+      axis.ticks.x = element_blank(),
+      text = element_text(size = 14)
+    ),
+  intersections_matrix_sizes = theme_bw() +
+    theme(
+      axis.text.x  = element_blank(),
+      axis.ticks.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank(),
+      text = element_text(size = 14)
+    ),
+  overall_sizes = theme_bw() +
+    theme(text = element_text(size = 14))
+)
+
+# Create UpSet plot -------------------------------------------------
+p_all <- upset(
+  df_sets_timepoints,
+  intersect = names(timepoint_colors),
+  name = "vOTUs",
+  min_size = 10,
+  width_ratio = 0.3,
+  base_annotations = list(
+    "Total vOTUs" = intersection_size()   # <- sin numeritos encima
+  ),
+  queries = lapply(names(timepoint_colors), function(grp) {
+    upset_query(
+      intersect       = grp,
+      fill            = timepoint_colors[[grp]],
+      color           = timepoint_colors[[grp]],
+      only_components = "intersections_matrix"
+    )
+  }),
+  themes = upset_themes_clean
+)
+
+print(p_all)
+
+# Save plot (SVG) ----------------------------------------------------
+out_dir <- here("results", "figures")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+ggsave(
+  filename = file.path(out_dir, "UpSet_all_vOTUs_timepoints.svg"),
+  plot     = p_all,
+  width    = 10,
+  height   = 6,
+  units    = "in"
+)
+
+# FIGURE 2B ----------------------------------------------------------
+# How is the dominant infant phageome (85%) distributed across
+# the four infant timepoints?
+
+theme_set(theme_bw())  # clean theme
+
+# Re-load input
+df <- read_csv(
+  here("data", "results_with_metadata.csv"),
+  show_col_types = FALSE
+)
+
+# General grouping to define the infant subset for the 85% dominant vOTUs
+df <- df %>%
+  mutate(Group_general = case_when(
+    mother_infant == "infant" ~ "Infant",
+    grepl("BM", Sample)       ~ "Human_milk",
+    mother_infant == "mother" ~ "Mother_stool",
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(Group_general))
+
+# Define the dominant infant vOTUs: those cumulatively accounting for 85% of total infant CPM
+dominant_votus <- df %>%
+  filter(Group_general == "Infant") %>%
+  group_by(vOTUs) %>%
+  summarise(total_cpm = sum(CPM, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(total_cpm)) %>%
+  mutate(
+    cum_cpm  = cumsum(total_cpm),
+    cum_perc = cum_cpm / sum(total_cpm) * 100
+  ) %>%
+  filter(cum_perc <= 85) %>%
+  pull(vOTUs)
+
+# Detailed grouping by infant timepoint
+df <- df %>%
+  mutate(Group_detailed = case_when(
+    mother_infant == "infant" & timepoint_months == 0.25  ~ "Infant_1W",
+    mother_infant == "infant" & timepoint_months == 1.00  ~ "Infant_1M",
+    mother_infant == "infant" & timepoint_months == 6.00  ~ "Infant_6M",
+    mother_infant == "infant" & timepoint_months == 12.00 ~ "Infant_12M",
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(Group_detailed))
+
+# Keep only dominant vOTUs
+df_dominant <- df %>%
+  filter(vOTUs %in% dominant_votus)
+
+# Presence matrix across infant timepoints
+presence_matrix <- df_dominant %>%
+  filter(CPM > 0) %>%
+  mutate(presence = 1) %>%
+  select(vOTUs, Group_detailed, presence) %>%
+  distinct() %>%
+  pivot_wider(
+    names_from = Group_detailed,
+    values_from = presence,
+    values_fill = 0
+  )
+
+# Ensure all dominant vOTUs are included (even if absent from a given timepoint)
+presence_matrix <- presence_matrix %>%
+  right_join(tibble(vOTUs = dominant_votus), by = "vOTUs") %>%
+  mutate(across(-vOTUs, ~ tidyr::replace_na(.x, 0)))
+
+# Ensure required columns exist
+groups_tp <- c("Infant_1W", "Infant_1M", "Infant_6M", "Infant_12M")
+for (g in groups_tp) {
+  if (!(g %in% colnames(presence_matrix))) {
+    presence_matrix[[g]] <- 0
+  }
+}
+
+# Colors
+color_map <- c(
+  "Infant_1W"  = "blue",
+  "Infant_1M"  = "darkgreen",
+  "Infant_6M"  = "mediumaquamarine",
+  "Infant_12M" = "gold"
+)
+
+# UpSet plot
+plot_upset <- upset(
+  presence_matrix,
+  intersect = groups_tp,
+  name = "Intersection",
+  min_size = 1,
+  base_annotations = list(
+    "Intersection size" = intersection_size()  # <- sin numeritos encima
+  ),
+  queries = lapply(groups_tp, function(grp) {
+    upset_query(
+      intersect       = grp,
+      fill            = color_map[[grp]],
+      color           = color_map[[grp]],
+      only_components = "intersections_matrix"
+    )
+  }),
+  width_ratio = 0.3,
+  themes = upset_themes_clean
+)
+
+print(plot_upset)
+
+# Save plot (SVG) ----------------------------------------------------
+out_dir <- here("results", "figures")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+out_svg <- file.path(out_dir, "upset_dominant_infant_phageome.svg")
+
+ggsave(
+  filename = out_svg,
+  plot = plot_upset,
+  width = 11,
+  height = 6,
+  units = "in"
+)
+
+# ---- Define clean themes ----- --------------------------------------
+upset_themes_clean <- list(
+  intersections_matrix = theme_bw() +
+    theme(
+      axis.text.x  = element_blank(),
+      axis.ticks.x = element_blank(),
+      text = element_text(size = 14)
+    ),
+
+  intersections_matrix_sizes = theme_void() +
+    theme(
+      text = element_text(size = 14),
+      axis.text.x  = element_blank(),
+      axis.ticks.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank()
+    ),
+
+  overall_sizes = theme_bw() +
+    theme(text = element_text(size = 14))
+)
+
+# FIGURE 1A --------------------------------------------------------------
+# UpSet across collapsed groups:
+# Infant gut (any timepoint) vs Mother stool vs Human milk
+
+
+# UpSet plot for collapsed groups (3 sets)
+sets_comp <- c("Infant","Mother","Human milk")
+set_colors <- c("Infant" = "gold", "Mother" = "purple4", "Human milk" = "pink")
+
+p_comp <- upset(
+  presence_comp,
+  intersect = sets_comp,
+  name = "vOTUs",
+  min_size = 1,
+  sort_intersections_by = "cardinality",
+  width_ratio = 0.33,
+  base_annotations = list(
+    "Total vOTUs" = intersection_size() 
+  ),
+  queries = lapply(sets_comp, function(s) {
+    upset_query(
+      intersect = s,
+      fill = set_colors[[s]],
+      color = set_colors[[s]],
+      only_components = "intersections_matrix"
+    )
+  }),
+  themes = upset_themes_clean
+)
+
+print(p_comp)
+
+
+# Save plot (SVG) ----------------------------------------------------
+out_dir <- here("results", "figures")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+out_svg <- file.path(out_dir, "upset_all.svg")
+
+ggsave(
+  filename = out_svg,
+  plot = p_comp,
+  width = 11,
+  height = 6,
+  units = "in"
+)
+
+```
+
+
