@@ -1,24 +1,16 @@
 # 📊 Plots & Statistical Analyses (R)
 
-This folder contains all scripts and RMarkdown notebooks used for data visualization and statistical analysis of the MAMI phageome dataset.
+This folder contains the R scripts and notebooks used to generate all figures and statistical results for the MAMI mother–infant phageome study, including comparisons across infant stool time points (1W, 1M, 6M, 12M) and maternal reservoirs (maternal stool and human milk).
 
-These analyses are performed after the main phageome processing workflow (mapping, clustering, annotation) and are focused on the interpretation and presentation of results for publication.
+These analyses are focused on the interpretation and presentation of results for publication.
 
 These scripts use the output tables provided in the data/ directory.
-
-## 🧪 Analyses performed
-
-This repository contains the R scripts and notebooks used to generate all figures and statistical results for the MAMI mother–infant phageome study, including comparisons across infant stool time points (1W, 1M, 6M, 12M) and maternal reservoirs (maternal stool and human milk).
-
-All analyses are performed downstream of the core phageome workflow (vOTU catalog generation, read mapping, CPM computation, and annotation).
-
 
 ## 1️⃣ Catalogue Structure & Maternal Sharing
 
 **Objective:** Characterize the global structure of the infant phageome and its overlap with maternal reservoirs.
 
 Shared and unique vOTUs across ecosystems:
-
 - Infant stool
 - Maternal stool
 - Human milk
@@ -41,7 +33,6 @@ Shared and unique vOTUs across ecosystems:
 - **Persistent High-Abundance (PHA)** core across all infant time points
 
 Additional analyses:
-
 - Maternal-source overlap of dominant/core vOTUs
 - Temporal stability of dominant components
 
@@ -165,5 +156,4 @@ A script like `install_packages.R` can be added to help install all dependencies
 
 ## 📁 File examples
 
-- `Taxonomy_Analysis.Rmd`: Barplots and summaries of viral taxa
 
