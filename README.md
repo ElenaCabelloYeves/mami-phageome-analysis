@@ -4,6 +4,10 @@
 
 This repository contains the analysis workflow used to reconstruct and analyze the infant gut phageome from shotgun metagenomic sequencing data of the MAMI cohort.
 
+The code accompanies the manuscript:
+
+“Breastfeeding and maternal sources shape infant gut phage communities during the first year of life.”
+
 ### ✨ Workflow summary ✨
 
 1. **Quality control and trimming**
