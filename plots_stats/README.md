@@ -4,6 +4,8 @@ This folder contains all scripts and RMarkdown notebooks used for data visualiza
 
 These analyses are performed after the main phageome processing workflow (mapping, clustering, annotation) and are focused on the interpretation and presentation of results for publication.
 
+These scripts use the output tables provided in the data/ directory.
+
 ## 🧪 Analyses performed
 
 - **Diversity**
