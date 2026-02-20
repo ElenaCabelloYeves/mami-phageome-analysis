@@ -31,5 +31,13 @@ The code accompanies the manuscript:
 7. **Ecological analyses**
    Diversity metrics, ordinations, and statistical analyses were performed in R.
 
-The final curated catalogue of vOTUs is in ENA: PRJEB105288
-This repository include all scripts to plot the figures used in the manuscript in plots_stats.
+
+**Data availability**
+
+The final curated catalogue of viral operational taxonomic units (vOTUs) is available at the European Nucleotide Archive (ENA):
+
+ENA Project accession: **PRJEB105288**
+
+Raw sequencing reads from the MAMI cohort (182 samples) are available at:
+
+ENA Project accession: **PRJEB74322**
