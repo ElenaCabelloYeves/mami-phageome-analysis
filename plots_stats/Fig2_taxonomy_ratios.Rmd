@@ -1,0 +1,655 @@
+---
+title: "Phage-bacteria taxonomy and ratios of the cohort"
+output: html_document
+date: "2025-12-22"
+---
+
+```{r}
+# ---------------------Taxonomy for PHAGES: ----------------------------------
+suppressPackageStartupMessages({
+  library(here)
+  library(dplyr); library(readr); library(tidyr); library(stringr)
+  library(ggplot2); library(scales)
+})
+
+# PATHS ----------------------------------------------------------------------
+out_dir <- here("results", "taxonomy")
+fig_dir <- file.path(out_dir, "figures")
+tab_dir <- file.path(out_dir, "tables")
+
+dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(tab_dir, recursive = TRUE, showWarnings = FALSE)
+
+phage_results <- here("data", "results_with_metadata.csv")
+
+# DATA -----------------------------------------------------------------------
+df <- readr::read_csv(phage_results, show_col_types = FALSE)
+
+# PALETTE --------------------------------------------------------------------
+user_palette_pastel <- c(
+  "Streptococcus"    = "pink",
+  "Bacteroides"      = "mediumaquamarine",
+  "Escherichia"      = "gold",
+  "Faecalibacterium" = "#C499CC",
+  "Bifidobacterium"  = "#6FA3F7",
+  "Klebsiella"       = "#7B2CBF",
+  "Blautia"          = "#90DDF0",
+  "Gemmiger"         = "#FFAC81",
+  "Ruminococcus"     = "#FA6459",
+  "Veillonella"      = "darkgreen",
+  "Pseudomonas"      = "#EEE2DF"
+)
+user_palette <- user_palette_pastel
+
+# HELPERS --------------------------------------------------------------------
+extract_clean_genus <- function(x){
+  g <- ifelse(!is.na(x) & str_detect(x, "g__"),
+              str_replace(x, ".*g__", ""),
+              NA_character_)
+  g <- sub("_[A-Z]$", "", g)
+  dplyr::recode(g,
+    "Kleibsella" = "Klebsiella",
+    "Gemminger"  = "Gemmiger",
+    .default = g
+  )
+}
+
+base_prepare <- function(df){
+  df %>%
+    mutate(
+      Group = dplyr::case_when(
+        mother_infant == "infant" & timepoint_months == 0.25 ~ "1 week",
+        mother_infant == "infant" & timepoint_months == 1    ~ "1 month",
+        mother_infant == "infant" & timepoint_months == 6    ~ "6 months",
+        mother_infant == "infant" & timepoint_months == 12   ~ "12 months",
+        mother_infant == "mother" & bodysite == "stool"      ~ "mothers",
+        bodysite == "breastmilk"                             ~ "milk",
+        TRUE ~ NA_character_
+      )
+    ) %>%
+    filter(!is.na(Group)) %>%
+    filter(CPM > 0) %>%
+    mutate(Genus = extract_clean_genus(Host.genus)) %>%
+    filter(!is.na(Genus))
+}
+
+ensure_palette <- function(levels_vec, pal){
+  miss <- setdiff(levels_vec, names(pal))
+  if(length(miss) > 0){
+    pal <- c(pal, setNames(scales::hue_pal()(length(miss)), miss))
+  }
+  pal
+}
+
+# PLOTS-----------------------------------------------------------------------
+plot_top10 <- function(df,
+                       include_other = FALSE,
+                       top_from = c("all","stool"),
+                       title = "Average proportional distribution of top-10 predicted host genera (CPM)"){
+
+  top_from <- match.arg(top_from)
+
+  dat <- base_prepare(df)
+
+  cpm_by_sample_genus <- dat %>%
+    group_by(Sample, Group, Genus) %>%
+    summarise(total_CPM = sum(CPM), .groups = "drop")
+
+  # ---- define TOP10 ----
+  if(top_from == "stool"){
+    cpm_for_top <- dat %>%
+      filter(bodysite == "stool") %>%
+      group_by(Sample, Genus) %>%
+      summarise(total_CPM = sum(CPM), .groups = "drop")
+    top10 <- cpm_for_top %>%
+      group_by(Genus) %>%
+      summarise(global_CPM = sum(total_CPM), .groups = "drop") %>%
+      arrange(desc(global_CPM)) %>%
+      slice_head(n = 10) %>%
+      pull(Genus)
+  } else {
+    top10 <- cpm_by_sample_genus %>%
+      group_by(Genus) %>%
+      summarise(global_CPM = sum(total_CPM), .groups = "drop") %>%
+      arrange(desc(global_CPM)) %>%
+      slice_head(n = 10) %>%
+      pull(Genus)
+  }
+
+  df_top <- cpm_by_sample_genus %>%
+    mutate(Genus = ifelse(Genus %in% top10, Genus, "Other"))
+
+  prop <- df_top %>%
+    group_by(Sample) %>%
+    mutate(Proportion = total_CPM / sum(total_CPM)) %>%
+    ungroup()
+
+  group_mean <- prop %>%
+    group_by(Group, Genus) %>%
+    summarise(Mean_Proportion = mean(Proportion), .groups = "drop")
+
+  group_mean_norm <- group_mean %>%
+    group_by(Group) %>%
+    mutate(Mean_Proportion = Mean_Proportion / sum(Mean_Proportion)) %>%
+    ungroup()
+
+  if(!include_other){
+    group_mean_norm <- group_mean_norm %>%
+      filter(Genus != "Other") %>%
+      group_by(Group) %>%
+      mutate(Mean_Proportion = Mean_Proportion / sum(Mean_Proportion)) %>%
+      ungroup()
+  }
+
+  group_levels <- c("1 week","1 month","6 months","12 months","mothers","milk")
+  group_mean_norm$Group <- factor(group_mean_norm$Group, levels = group_levels)
+
+  genus_order <- group_mean_norm %>%
+    group_by(Genus) %>%
+    summarise(tot = sum(Mean_Proportion), .groups = "drop") %>%
+    arrange(desc(tot)) %>%
+    pull(Genus)
+
+  if("Other" %in% genus_order){
+    genus_order <- c("Other", setdiff(genus_order, "Other"))
+  }
+  group_mean_norm$Genus <- factor(group_mean_norm$Genus, levels = genus_order)
+
+  pal <- ensure_palette(levels(group_mean_norm$Genus), user_palette)
+  if("Other" %in% names(pal)) pal["Other"] <- "grey70"
+
+  ggplot(group_mean_norm, aes(Group, Mean_Proportion, fill = Genus)) +
+    geom_col(color = "black", linewidth = 0.2) +
+    scale_y_continuous(labels = percent_format(accuracy = 1)) +
+    scale_fill_manual(values = pal, drop = FALSE) +
+    labs(x = NULL, y = "Relative abundance (%)", fill = "Predicted host genus", title = title) +
+    theme_minimal(base_size = 12) +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          axis.text.x = element_text(angle = 30, hjust = 1),
+          legend.position = "bottom",
+          legend.title = element_text(face = "bold"))
+}
+# RUN  ----------------------------------------------------------------------
+# IMPORTANT: top10 defined from stool ---------------------------------------
+p_top10_noOther   <- plot_top10(df, include_other = FALSE, top_from = "stool")
+p_top10_withOther <- plot_top10(df, include_other = TRUE,  top_from = "stool")
+
+print(p_top10_noOther)
+
+# SAVE  ---------------------------------------------------------------------
+ggsave(filename = file.path(fig_dir, "phages_stool_10_host.png"),
+       plot = p_top10_noOther, width = 11, height = 10, dpi = 300)
+ggsave(file.path(out_dir, "phages_stool_10_host.pdf"),
+       p_top10_noOther, width = 11, height = 10, bg = "white")
+
+ggsave(filename = file.path(fig_dir, "phages_stool_withother_host.png"),
+       plot = p_top10_withOther, width = 11, height = 10, dpi = 300)
+ggsave(file.path(out_dir, "phages_stool_withother_host.pdf"),
+       p_top10_withOther, width = 11, height = 10, bg = "white")
+
+```
+
+```{r}
+suppressPackageStartupMessages({
+  library(here)
+  library(dplyr)
+  library(tidyr)
+  library(stringr)
+  library(readxl)
+  library(readr)
+  library(ggplot2)
+  library(scales)
+  library(ggpattern)
+})
+
+# PATHS ----------------------------------------------------------------------
+bact_xlsx  <- here("data", "mmc3.xlsx")
+phage_csv  <- here("data", "results_with_metadata.csv")  # phages + metadata
+out_dir    <- here("results", "figures", "phage_bacteria_combo")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# PALETTE --------------------------------------------------------------------
+user_palette_pastel <- c(
+  "Streptococcus"    = "pink",
+  "Bacteroides"      = "mediumaquamarine",
+  "Escherichia"      = "gold",
+  "Faecalibacterium" = "#C499CC",
+  "Bifidobacterium"  = "#6FA3F7",
+  "Klebsiella"       = "#7B2CBF",
+  "Blautia"          = "#90DDF0",
+  "Gemmiger"         = "#FFAC81",
+  "Ruminococcus"     = "#FA6459",
+  "Pseudomonas"      = "#EEE2DF",
+  "Veillonella"      = "darkgreen"
+)
+
+ensure_palette <- function(levels_vec, pal){
+  miss <- setdiff(levels_vec, names(pal))
+  if(length(miss) > 0){
+    pal <- c(pal, setNames(scales::hue_pal()(length(miss)), miss))
+  }
+  pal
+}
+
+# HELPERS --------------------------------------------------------------------
+
+collapse_split_suffix <- function(g){
+  g %>%
+    str_replace("_[A-Z]$", "") %>%
+    str_trim()
+}
+
+# if |s__ species to infere genus; if not, use previous from | ---------------
+extract_genus_from_mmc3 <- function(clade){
+  clade <- as.character(clade)
+
+  has_sp <- str_detect(clade, "\\|s__")
+
+  # species part: what comes after |s__
+  sp <- if_else(has_sp, str_replace(clade, ".*\\|s__", ""), NA_character_)
+  sp_genus <- if_else(!is.na(sp), str_replace(sp, "_.*$", ""), NA_character_)
+
+  # genus part: what comes before the first |
+  g_before_pipe <- str_replace(clade, "\\|.*$", "")
+
+  # if there are species -> use genus; if not -> use genus before pipe
+  out <- if_else(has_sp, sp_genus, g_before_pipe)
+  out
+}
+
+clean_bact_genus <- function(clade){
+  g <- extract_genus_from_mmc3(clade)
+  g <- collapse_split_suffix(g)
+
+  # typos 
+  g <- dplyr::recode(g,
+    "Kleibsella" = "Klebsiella",
+    "Gemminger"  = "Gemmiger",
+    .default = g
+  )
+
+  g
+}
+
+# PHAGE + METADATA -----------------------------------------------------------
+ph <- readr::read_csv(phage_csv, show_col_types = FALSE)
+
+meta <- ph %>%
+  select(Sample, mother_infant, bodysite, timepoint_months) %>%
+  distinct() %>%
+  mutate(
+    Group = case_when(
+      mother_infant == "infant" & timepoint_months == 0.25 ~ "1 week",
+      mother_infant == "infant" & timepoint_months == 1    ~ "1 month",
+      mother_infant == "infant" & timepoint_months == 6    ~ "6 months",
+      mother_infant == "infant" & timepoint_months == 12   ~ "12 months",
+      mother_infant == "mother" & bodysite == "stool"      ~ "mothers",
+      bodysite == "breastmilk"                             ~ "milk",
+      TRUE ~ NA_character_
+    ),
+    HostClass = case_when(
+      mother_infant == "infant" ~ "Infant",
+      mother_infant == "mother" ~ "Mother",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(Group))
+
+group_levels <- c("1 week","1 month","6 months","12 months","mothers","milk")
+
+# PHAGE GENUS TABLE ----------------------------------------------------------
+phage_genus <- ph %>%
+  filter(CPM > 0) %>%
+  mutate(Genus = extract_clean_phage_genus(Host.genus)) %>%
+  filter(!is.na(Genus)) %>%
+  group_by(Sample, Genus) %>%
+  summarise(CPM_genus = sum(CPM, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Sample) %>%
+  mutate(CPM_total = sum(CPM_genus, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(Rel_abund_phage = if_else(CPM_total > 0, CPM_genus / CPM_total, 0)) %>%
+  left_join(meta, by = "Sample")
+
+# LOAD MMC3 ----------------------------------------------------------
+braw <- readxl::read_excel(bact_xlsx)
+stopifnot("clade_name" %in% names(braw))
+
+bnum <- braw %>%
+  mutate(across(-clade_name, ~ as.numeric(gsub(",", ".", as.character(.)))))
+
+blong <- bnum %>%
+  pivot_longer(-clade_name, names_to = "Sample", values_to = "percent") %>%
+  filter(!is.na(percent)) %>%
+  mutate(prop = percent / 100)
+
+bact_genus <- blong %>%
+  mutate(Genus = clean_bact_genus(clade_name)) %>%
+  filter(!is.na(Genus), Genus != "") %>%
+  group_by(Sample, Genus) %>%
+  summarise(Rel_abund_bact = sum(prop, na.rm = TRUE), .groups = "drop") %>%
+  left_join(meta, by = "Sample")
+
+# FILTER STOOL ONLY ---------------------------------------------------------
+phage_stool <- phage_genus %>% filter(bodysite == "stool", !is.na(HostClass))
+bact_stool  <- bact_genus  %>% filter(bodysite == "stool", !is.na(HostClass))
+```
+
+```{r}
+# BACTERIA for PHAGE top10 host genera---------------------------------------
+#          - no Other
+#          - include milk 
+
+# Top 10 host genera defined by phages --------------------------------------
+top10_phage_genera <- phage_stool %>%
+  group_by(Genus) %>%
+  summarise(global = sum(CPM_genus, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(global)) %>%
+  slice_head(n = 10) %>%
+  pull(Genus)
+
+# Bacteria: use bact_genus --------------------------------------------------
+bact_for_phageTop10_noOther <- bact_genus %>%
+  filter(!is.na(Group)) %>%                      # meta is well joined
+  filter(Genus %in% top10_phage_genera)
+
+# Plot ----------------------------------------------------------------------
+plot_stack_fixed_list_noOther <- function(df, title, fill_title, palette){
+
+  dat <- df %>%
+    select(Sample, Group, Genus, Rel_abund_bact) %>%
+    filter(!is.na(Group), !is.na(Genus), Rel_abund_bact > 0)
+
+  # sample proportion inside the sample (top10)
+  prop <- dat %>%
+    group_by(Sample) %>%
+    mutate(Proportion = Rel_abund_bact / sum(Rel_abund_bact, na.rm = TRUE)) %>%
+    ungroup()
+
+  group_mean <- prop %>%
+    group_by(Group, Genus) %>%
+    summarise(Mean_Proportion = mean(Proportion, na.rm = TRUE), .groups = "drop") %>%
+    group_by(Group) %>%
+    mutate(Mean_Proportion = Mean_Proportion / sum(Mean_Proportion, na.rm = TRUE)) %>%
+    ungroup()
+
+  group_levels2 <- c("1 week","1 month","6 months","12 months","mothers","milk")
+  group_mean$Group <- factor(group_mean$Group, levels = group_levels2)
+
+  genus_order <- group_mean %>%
+    group_by(Genus) %>%
+    summarise(tot = sum(Mean_Proportion), .groups = "drop") %>%
+    arrange(desc(tot)) %>%
+    pull(Genus)
+  group_mean$Genus <- factor(group_mean$Genus, levels = genus_order)
+
+  pal <- ensure_palette(levels(group_mean$Genus), palette)
+
+  ggplot(group_mean, aes(Group, Mean_Proportion, fill = Genus)) +
+    geom_col(color = "black", linewidth = 0.2) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    scale_fill_manual(values = pal, drop = FALSE) +
+    labs(x = NULL, y = "Relative abundance (%)", fill = fill_title, title = title) +
+    theme_minimal(base_size = 12) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      axis.text.x = element_text(angle = 30, hjust = 1),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold")
+    )
+}
+
+p_bact_for_phageTop10_noOther <- plot_stack_fixed_list_noOther(
+  df = bact_for_phageTop10_noOther,
+  title = "Bacteria (MMC3) for phage top-10 host genera — incl. milk (no Other)",
+  fill_title = "Bacterial genus",
+  palette = user_palette_pastel
+)
+
+print(p_bact_for_phageTop10_noOther)
+
+ggsave(file.path(out_dir, "BACT_for_PHAGE_top10_NO_OTHER_inclMilk.png"),
+       p_bact_for_phageTop10_noOther, width = 11, height = 10, dpi = 300, bg = "white")
+ggsave(file.path(out_dir, "BACT_for_PHAGE_top10_NO_OTHER_inclMilk.pdf"),
+       p_bact_for_phageTop10_noOther, width = 11, height = 10, bg = "white")
+
+```
+
+```{r}
+library(stringr)
+
+extract_clean_phage_genus <- function(x){
+  x %>%
+    as.character() %>%
+    str_trim() %>%
+    # extract genus if it comes like g__Bacteroides
+    ifelse(str_detect(., "g__"),
+           str_replace(., ".*g__", ""),
+           .) %>%
+    # delete all that comes after |
+    str_replace("\\|.*$", "") %>%
+    # delete sufixes GTDB like _A, _B, _C
+    str_replace("_[A-Z]$", "") %>%
+    # delete multiple spaces
+    str_replace_all("\\s+", " ")
+}
+```
+
+```{r}
+# --- phage_stool for the ratio ----------------------------------------------
+# we need df with CPM, Host.genus, Sample and metadata with Sample, HostClass and bodysite
+
+phage_stool <- ph %>%
+  filter(CPM > 0) %>%
+  mutate(Genus = extract_clean_phage_genus(Host.genus)) %>%
+  filter(!is.na(Genus), Genus != "") %>%
+  group_by(Sample, Genus) %>%
+  summarise(CPM_genus = sum(CPM, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Sample) %>%
+  mutate(CPM_total = sum(CPM_genus, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(Rel_abund_phage = if_else(CPM_total > 0, CPM_genus / CPM_total, 0)) %>%
+  left_join(meta %>% select(Sample, HostClass, bodysite), by = "Sample") %>%
+  filter(bodysite == "stool", !is.na(HostClass)) %>%
+  select(Sample, HostClass, Genus, CPM_genus, Rel_abund_phage)
+```
+
+
+```{r}
+# RATIO PHAGE / BACTERIA ----------------------------------------------------
+# - stool only
+# - top10 host genera defined by phages
+# - ratio per sample, median summary
+# - ORDERED by GLOBAL RATIO (high -> low)
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(ggplot2)
+  library(scales)
+  library(ggpattern)
+  library(here)
+})
+
+out_dir <- here("results", "figures", "phage_bacteria_combo")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# JOIN RATIO per sample -----------------------------------------------------
+
+bact_min <- 1e-6   # bacteria threshold to avoid fake infinite ratios
+
+ratio_df <- bact_stool %>%
+  select(Sample, HostClass, Genus, Rel_abund_bact) %>%
+  full_join(
+    phage_stool %>% 
+      select(Sample, HostClass, Genus, Rel_abund_phage, CPM_genus),
+    by = c("Sample","HostClass","Genus")
+  ) %>%
+  mutate(
+    Rel_abund_bact  = replace_na(Rel_abund_bact, 0),
+    Rel_abund_phage = replace_na(Rel_abund_phage, 0),
+    CPM_genus       = replace_na(CPM_genus, 0)
+  ) %>%
+  filter(Genus %in% top10_phage_genera) %>%
+  mutate(
+    ratio_sample = if_else(
+      Rel_abund_bact > bact_min,
+      Rel_abund_phage / Rel_abund_bact,
+      NA_real_
+    )
+  )
+
+# SUMMARY: MEDIAN RATIO -----------------------------------------------------
+ratio_sum <- ratio_df %>%
+  group_by(HostClass, Genus) %>%
+  summarise(
+    ratio = median(ratio_sample, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    HostClass = factor(HostClass, levels = c("Infant","Mother"))
+  )
+
+# Order by global ratio (high -> low) ----------------------------------------
+ratio_order <- ratio_sum %>%
+  group_by(Genus) %>%
+  summarise(ratio_global = median(ratio, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(ratio_global)) %>%
+  pull(Genus)
+
+ratio_sum <- ratio_sum %>%
+  mutate(Genus = factor(Genus, levels = ratio_order))
+
+# Log10 axis -----------------------------------------------------------------
+vals <- ratio_sum$ratio[is.finite(ratio_sum$ratio) & ratio_sum$ratio > 0]
+stopifnot(length(vals) > 0)
+
+lb <- floor(log10(min(vals)))
+ub <- ceiling(log10(max(vals)))
+brks <- 10^(lb:ub)
+
+pal_ratio <- ensure_palette(levels(ratio_sum$Genus), user_palette_pastel)
+
+# FINAL PLOT -----------------------------------------------------------------
+p_ratio_sorted <- ggplot(
+  ratio_sum,
+  aes(x = Genus, y = ratio, fill = Genus, pattern = HostClass)
+) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "grey40") +
+  ggpattern::geom_col_pattern(
+    position = position_dodge(width = 0.72),
+    width = 0.72,
+    colour = "black", linewidth = 0.25,
+    pattern_fill = "black",
+    pattern_density = 0.5,
+    pattern_spacing = 0.06,
+    pattern_key_scale_factor = 1.6
+  ) +
+  scale_y_continuous(
+    trans = "log10",
+    breaks = brks,
+    minor_breaks = NULL,
+    labels = label_number(accuracy = 0.1),
+    expand = expansion(mult = c(0.02, 0.08))
+  ) +
+  scale_fill_manual(
+    values = pal_ratio, drop = FALSE,
+    guide = guide_legend(
+      title = "Genus",
+      override.aes = list(pattern = "none", colour = NA)
+    )
+  ) +
+  scale_pattern_manual(
+    values = c(Infant = "none", Mother = "stripe"),
+    guide = guide_legend(title = "Host")
+  ) +
+  labs(
+    title = "Phage-to-bacteria ratio per genus (stool)",
+    subtitle = "Ordered by global phage-to-bacteria ratio (high → low)",
+    x = "Genus",
+    y = "Phage / Bacteria ratio (log10)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom",
+    legend.box = "vertical",
+    legend.key.width = grid::unit(0.9, "cm"),
+    legend.key.height = grid::unit(0.7, "cm")
+  )
+
+print(p_ratio_sorted)
+
+# SAVE ----------------------------------------------------------------------
+ggsave(
+  file.path(out_dir, "Ratio_phage_bacteria.png"),
+  p_ratio_sorted,
+  width = 11, height = 10, dpi = 600, bg = "white"
+)
+
+ggsave(
+  file.path(out_dir, "Ratio_phage_bacteria.pdf"),
+  p_ratio_sorted,
+  width = 11, height = 10, bg = "white"
+)
+```
+
+
+
+```{r}
+# Check if there are duplicate names 
+bact_genus %>%
+  count(Genus, sort = TRUE) %>%
+  filter(str_detect(Genus, "_[A-Z]$") | str_detect(Genus, "\\s") | str_detect(Genus, "\\|")) %>%
+  print(n = 50)
+
+phage_genus %>%
+  count(Genus, sort = TRUE) %>%
+  filter(str_detect(Genus, "_[A-Z]$") | str_detect(Genus, "\\s") | str_detect(Genus, "\\|")) %>%
+  print(n = 50)
+```
+
+```{r}
+sort(unique(phage_stool$Genus))[grepl("_[A-Z]$", sort(unique(phage_stool$Genus)))]
+sort(unique(bact_stool$Genus))[grepl("_[A-Z]$", sort(unique(bact_stool$Genus)))]
+```
+
+
+
+
+```{r}
+# VALUES --------------------------------------------------------------------
+ratio_table_long <- ratio_sum %>%
+  mutate(
+    Genus = as.character(Genus),
+    HostClass = as.character(HostClass)
+  ) %>%
+  left_join(
+    ratio_order %>%
+      tibble::tibble(Genus = as.character(.), order_global = seq_along(.)),
+    by = "Genus"
+  ) %>%
+  left_join(
+    ratio_order %>%
+      tibble::tibble(Genus = as.character(.)) %>%
+      left_join(
+        ratio_sum %>%
+          mutate(Genus = as.character(Genus)) %>%
+          group_by(Genus) %>%
+          summarise(ratio_global = median(ratio, na.rm = TRUE), .groups = "drop"),
+        by = "Genus"
+      ),
+    by = "Genus"
+  ) %>%
+  arrange(order_global, HostClass) %>%
+  select(order_global, Genus, HostClass, ratio, ratio_global)
+
+ratio_table_long
+
+write.csv(
+  ratio_table_long,
+  file.path(out_dir, "Ratio_phage_bacteria_values.csv"),
+  row.names = FALSE
+)
+```
+
