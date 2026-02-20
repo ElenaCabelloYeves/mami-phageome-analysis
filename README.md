@@ -1,4 +1,4 @@
-# Mother–Infant gut phageome metagenomic workflow (MAMI cohort)
+# Mother–Infant Gut and Milk Phageomes Metagenomic Workflow (MAMI Cohort)
 
 ## ✨ Overview ✨
 
