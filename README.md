@@ -27,4 +27,5 @@ This repository contains the analysis workflow used to reconstruct and analyze t
 7. **Ecological analyses**
    Diversity metrics, ordinations, and statistical analyses were performed in R.
 
-The final outputs include the curated vOTU catalogue and all figures used in the manuscript.
+Final curated vOTUs catalogue are in ENA: PRJEB105288
+This repository include all scripts to plot the figures used in the manuscript in plots_stats.
