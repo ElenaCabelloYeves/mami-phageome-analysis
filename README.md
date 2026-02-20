@@ -8,6 +8,22 @@ The code accompanies the manuscript:
 
 “Breastfeeding and maternal sources shape infant gut phage communities during the first year of life.”
 
+Figure generation and statistical analyses are located in the plots_stats/ directory.
+
+## Dataset description
+
+This study analyzes assembled viral contigs (vOTUs) derived from shotgun metagenomic sequencing of the MAMI mother–infant cohort.
+
+Raw reads from 182 samples were assembled independently per sample. Viral sequences ≥10 kb were identified using geNomad and clustered into non-redundant viral populations (vOTUs) using:
+
+- ≥95% average nucleotide identity (ANI)
+
+- ≥85% alignment fraction (AF)
+
+Viral abundances were estimated by mapping the original reads back to the curated contigs and calculating CPM and RPK values.
+
+This dataset corresponds to the final vOTU catalogue analyzed in the associated manuscript.
+
 ## Workflow summary 
 
 1. **Quality control and trimming**
