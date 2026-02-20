@@ -48,8 +48,5 @@ A script like `install_packages.R` can be added to help install all dependencies
 
 ## 📁 File examples
 
-- `NMDS_Plots_Elena.Rmd`: Ordination plots and PERMANOVA results
-- `Heatmap_CPM.Rmd`: Abundance heatmaps of filtered vOTUs
 - `Taxonomy_Analysis.Rmd`: Barplots and summaries of viral taxa
-- `Core_Phageome_Analysis.Rmd`: Identification and visualization of core vOTUs
-- `Host_Phage_Integration.Rmd`: Combining iPHoP host predictions with abundance data
+
