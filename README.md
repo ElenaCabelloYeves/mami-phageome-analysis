@@ -1,10 +1,10 @@
-# MAMI phageome analysis pipeline
+# MAMI phageome analysis workflow
 
 ## Overview
 
-This repository contains the analysis pipeline used to reconstruct and analyze the infant gut phageome from shotgun metagenomic sequencing data of the MAMI cohort.
+This repository contains the analysis workflow used to reconstruct and analyze the infant gut phageome from shotgun metagenomic sequencing data of the MAMI cohort.
 
-### Pipeline summary
+### Workflow summary
 
 1. **Quality control and trimming**
    Raw reads were quality-checked using FastQC and summarized with MultiQC.
