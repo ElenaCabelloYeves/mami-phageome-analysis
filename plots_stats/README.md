@@ -56,24 +56,24 @@ Additional analyses:
 
 **Objective:** Quantify phageome diversity and ecological structuring across development.
 
-# Alpha Diversity
+**Alpha Diversity**
 
 - vOTU richness (per sample)
 - Shannon diversity (via vegan)
 
-# Beta Diversity
+**Beta Diversity**
 
 - Bray–Curtis dissimilarity
 - Principal Coordinates Analysis (PCoA)
 - PERMANOVA (adonis2)
 - Dispersion checks (betadisper) to control for heterogeneity effects
 
-# Phage–Bacteria Coordination
+**Phage–Bacteria Coordination**
 
 - Mantel correlation (phageome vs bacteriome distance matrices)
 - Procrustes alignment tests
 
-# Visualization
+**Visualization**
 
 - Alpha diversity panels
 - PCoA ordination plots
