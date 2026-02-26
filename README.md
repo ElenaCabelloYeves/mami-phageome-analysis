@@ -30,15 +30,13 @@ This dataset corresponds to the final vOTU catalogue analyzed in the associated 
 2. Open any .Rmd file in plots_stats/ and click Knit in RStudio.
 3. The scripts use processed inputs in the data/ directory (no raw reads required).
 
-Input files:
+**Input files:**
 
 - results_with_metadata.csv: main analysis table containing vOTU abundances (CPM/RPK), sample metadata (mother/infant, body site, timepoint), viral annotations, and predicted bacterial hosts. 
 
 - mmc3.xlsx: genus-level bacterial relative abundance table used for comparisons between bacterial communities and the phageome.
 
 Raw sequencing data are publicly available at ENA (PRJEB74322; curated vOTU catalogue: PRJEB105288).
-
-**Required R packages:** dplyr, tidyr, readr, ggplot2, ComplexUpset, here, rmarkdown.
 
 ## Workflow summary 
 
