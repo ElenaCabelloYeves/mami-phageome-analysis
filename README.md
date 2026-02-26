@@ -42,25 +42,25 @@ Raw sequencing data are publicly available at ENA (PRJEB74322; curated vOTU cata
 
 ## Workflow summary 
 
-2.  trimming**
-   Raw reads were quality-checked using FastQC and summarized with MultiQC.
+1. **Quality control and trimming**
+   Raw reads were quality-checked using FastQC and summarized with MultiQC. Metagenomic assembly Each sample was assembled independently using SPAdes in metagenomic mode.
 
-3. **Metagenomic assembly**
+2. **Metagenomic assembly**
    Each sample was assembled independently using SPAdes in metagenomic mode.
 
-4. **Viral sequence detection**
+3. **Viral sequence detection**
    Viral contigs were identified using geNomad.
 
-5. **vOTU clustering**
+4. **vOTU clustering**
    Viral contigs were clustered into non-redundant vOTUs using 95% ANI and 85% alignment fraction thresholds (anicalc/aniclust).
 
-6. **Abundance estimation**
+5. **Abundance estimation**
    Reads were mapped back to vOTU representatives using BBMap and normalized as CPM/RPK.
 
-7. **Host prediction and annotation**
+6. **Host prediction and annotation**
    Host assignment was performed using iPHoP and taxonomic annotation using geNomad/taxMyPhage.
 
-8. **Ecological analyses**
+7. **Ecological analyses**
    Diversity metrics, ordinations, and statistical analyses were performed in R.
 
 
