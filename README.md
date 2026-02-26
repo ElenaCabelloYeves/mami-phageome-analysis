@@ -24,27 +24,43 @@ Viral abundances were estimated by mapping the original reads back to the curate
 
 This dataset corresponds to the final vOTU catalogue analyzed in the associated manuscript.
 
+## Reproducing figures
+
+1. Download/clone this repository.
+2. Open any .Rmd file in plots_stats/ and click Knit in RStudio.
+3. The scripts use processed inputs in the data/ directory (no raw reads required).
+
+Input files:
+
+- results_with_metadata.csv: main analysis table containing vOTU abundances (CPM/RPK), sample metadata (mother/infant, body site, timepoint), viral annotations, and predicted bacterial hosts. 
+
+- mmc3.xlsx: genus-level bacterial relative abundance table used for comparisons between bacterial communities and the phageome.
+
+Raw sequencing data are publicly available at ENA (PRJEB74322; curated vOTU catalogue: PRJEB105288).
+
+**Required R packages:** dplyr, tidyr, readr, ggplot2, ComplexUpset, here, rmarkdown.
+
 ## Workflow summary 
 
-1. **Quality control and trimming**
+2.  trimming**
    Raw reads were quality-checked using FastQC and summarized with MultiQC.
 
-2. **Metagenomic assembly**
+3. **Metagenomic assembly**
    Each sample was assembled independently using SPAdes in metagenomic mode.
 
-3. **Viral sequence detection**
+4. **Viral sequence detection**
    Viral contigs were identified using geNomad.
 
-4. **vOTU clustering**
+5. **vOTU clustering**
    Viral contigs were clustered into non-redundant vOTUs using 95% ANI and 85% alignment fraction thresholds (anicalc/aniclust).
 
-5. **Abundance estimation**
+6. **Abundance estimation**
    Reads were mapped back to vOTU representatives using BBMap and normalized as CPM/RPK.
 
-6. **Host prediction and annotation**
+7. **Host prediction and annotation**
    Host assignment was performed using iPHoP and taxonomic annotation using geNomad/taxMyPhage.
 
-7. **Ecological analyses**
+8. **Ecological analyses**
    Diversity metrics, ordinations, and statistical analyses were performed in R.
 
 
