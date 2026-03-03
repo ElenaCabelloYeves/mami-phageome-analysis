@@ -132,8 +132,6 @@ Most scripts rely on the following R packages:
 - `patchwork`
 - `RColorBrewer`
 
-A script like `install_packages.R` can be added to help install all dependencies.
-
 ## 📁 File examples
 
 - Fig1-2_Transmission_vOTUs.Rmd: contains Upset plots of vOTUs in mother-infant gut and milk used to make Figures 1-2 
