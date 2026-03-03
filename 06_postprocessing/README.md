@@ -1,7 +1,7 @@
-# Postprocessing and Filtering
+# Post-processing and Downstream Analyses
 This folder contains downstream utility scripts applied after generating the vOTU reference dataset and abundance matrices (CPM/RPK). These steps standardize identifiers, remove technical artifacts (duplicates), and create filtered datasets used in final analyses and plotting.
 
-This include:
+**This include:**
 - Renaming contig/vOTU headers to consistent IDs (e.g., vOTU1, vOTU2, …)
 - Filtering vOTUs by length (e.g., ≥10 kb) to build alternative datasets
 - Removing duplicated records (by header and/or sequence)
