@@ -1,0 +1,155 @@
+---
+title: "Sankey plot of phages linked to predicted host families"
+output: html_document
+date: "2026-01-03"
+---
+
+```{r}
+# Load libraries --------------------------------------------------------------
+library(here)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(ggalluvial)
+library(stringr)
+library(scales)
+library(svglite)
+
+# Paths -----------------------------------------------------------------------
+# Base output dir inside the repository
+out_dir <- here("results", "taxonomy")
+fig_dir <- file.path(out_dir, "figures")
+tab_dir <- file.path(out_dir, "tables")
+
+dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(tab_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Input data inside the repository
+phage_results <- here("data", "results_with_metadata.csv")
+
+# Load data -------------------------------------------------------------------
+df_all <- readr::read_csv(phage_results, show_col_types = FALSE) %>%
+  mutate(
+    Host.genus = str_extract(Host.genus, "(?<=f__)[^;]+"),
+    Host.genus = case_when(
+      is.na(Host.genus) ~ "Unassigned host",
+      TRUE ~ Host.genus
+    )
+  )
+
+# Top more abundant hosts + minor taxa ----------------------------------------
+# Exclude Oscillospiraceae from the explicit top list
+top_n <- 9
+top_hosts <- df_all %>%
+  filter(Host.genus != "Oscillospiraceae") %>%
+  group_by(Host.genus) %>%
+  summarise(total_cpm = sum(CPM, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(total_cpm)) %>%
+  slice_head(n = top_n) %>%
+  pull(Host.genus)
+
+df_all <- df_all %>%
+  mutate(Host.genus = ifelse(Host.genus %in% top_hosts, Host.genus, "Minor taxa"))
+
+# Order + palette
+host_order_all <- df_all %>%
+  group_by(Host.genus) %>%
+  summarise(total_cpm = sum(CPM, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(total_cpm)) %>%
+  pull(Host.genus)
+
+host_colors_all <- setNames(hue_pal()(length(host_order_all)), host_order_all)
+
+# Manual tweaks (keep as in your last chunk)
+host_colors_all["Unassigned host"] <- "grey55"
+host_colors_all["Minor taxa"] <- "burlywood3"
+host_colors_all["Bifidobacteriaceae"] <- "#6FA3F7"
+host_colors_all["Enterobacteriaceae"] <- "gold"
+host_colors_all["Lacnhospiraceae"] <- "gold"          
+host_colors_all["Pseudomonadaceae"] <- "#EEE2DF"
+host_colors_all["Ruminococcaceae"] <- "#FA6459"
+host_colors_all["Streptococcaceae"] <- "pink"
+host_colors_all["Bacteroidaceae"] <- "mediumaquamarine"
+
+# Build sankey data -----------------------------------------------------------
+sankey <- df_all %>%
+  select(vOTUs, Host.genus, mother_infant, bodysite, timepoint_months, CPM) %>%
+  mutate(
+    timepoint_label = case_when(
+      timepoint_months == 0.25 & mother_infant == "infant" & bodysite == "breastmilk" ~ "1 Week Infant – Breastmilk",
+      timepoint_months == 1    & mother_infant == "infant" & bodysite == "breastmilk" ~ "1 Month Infant – Breastmilk",
+      timepoint_months == 6    & mother_infant == "infant" & bodysite == "breastmilk" ~ "6 Months Infant – Breastmilk",
+      timepoint_months == 12   & mother_infant == "infant" & bodysite == "breastmilk" ~ "12 Months Infant – Breastmilk",
+      timepoint_months == 0.25 & mother_infant == "infant" ~ "1 Week Infant",
+      timepoint_months == 1    & mother_infant == "infant" ~ "1 Month Infant",
+      timepoint_months == 6    & mother_infant == "infant" ~ "6 Months Infant",
+      timepoint_months == 12   & mother_infant == "infant" ~ "12 Months Infant",
+      mother_infant == "mother" ~ "mothers",
+      TRUE ~ "other"
+    )
+  ) %>%
+  group_by(vOTUs, Host.genus, timepoint_label) %>%
+  summarise(CPM_sum = sum(CPM, na.rm = TRUE), .groups = "drop") %>%
+  group_by(vOTUs) %>%
+  filter(sum(CPM_sum) > 10000) %>%   # keep your threshold
+  ungroup()
+
+# Factor orders
+host_order_sankey <- sankey %>%
+  group_by(Host.genus) %>%
+  summarise(total_CPM = sum(CPM_sum, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(total_CPM)) %>%
+  pull(Host.genus)
+
+time_levels <- c(
+  "1 Week Infant", "1 Week Infant – Breastmilk",
+  "1 Month Infant", "1 Month Infant – Breastmilk",
+  "6 Months Infant", "6 Months Infant – Breastmilk",
+  "12 Months Infant", "12 Months Infant – Breastmilk",
+  "mothers"
+)
+
+sankey <- sankey %>%
+  mutate(
+    Host.genus = factor(Host.genus, levels = host_order_sankey),
+    timepoint_label = factor(timepoint_label, levels = time_levels)
+  )
+
+# Plot ------------------------------------------------------------------------
+p_all <- ggplot(sankey,
+                aes(axis1 = timepoint_label, axis2 = Host.genus, y = CPM_sum)) +
+  geom_alluvium(aes(fill = Host.genus), alpha = 0.8) +
+  geom_stratum(aes(fill = Host.genus), color = "black") +
+  geom_text(stat = "stratum", aes(label = after_stat(stratum)), size = 5) +
+  scale_x_discrete(
+    limits = c("timepoint_label", "Host.genus"),
+    expand = c(0.1, 0.1),
+    labels = c("Timepoint", "Predicted bacterial host family")
+  ) +
+  scale_fill_manual(values = host_colors_all) +
+  labs(
+    title = "Sankey plot: core phages linked to bacterial host family across timepoints",
+    x = NULL, y = "Total CPM"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(size = 14),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.position = "none"
+  )
+
+print(p_all)
+
+# Save figures ----------------------------------------------------------------
+base_name <- file.path(fig_dir, "sankey_plot_all_2")
+
+ggsave(paste0(base_name, ".png"), plot = p_all, width = 18, height = 13, dpi = 300)
+ggsave(paste0(base_name, ".pdf"), plot = p_all, width = 18, height = 13)
+ggsave(paste0(base_name, ".svg"), plot = p_all, width = 18, height = 13)
+
+# Save table ------------------------------------------------------------------
+# summary table used to draw the plot
+readr::write_csv(sankey, file.path(tab_dir, "sankey_plot_all_2_data.csv"))
+```
+
+
