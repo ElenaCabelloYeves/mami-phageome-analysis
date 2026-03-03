@@ -6,4 +6,4 @@ Scripts to collect and organize the final outputs for:
 - Taxonomy assignments
 - Quality assessments
 
-This ensures all processed and filtered data are ready for publication or integration into downstream analyses (e.g., NMDS, core phageome, temporal dynamics).
+This ensures all processed and filtered data are ready for publication or integration into downstream analyses.
