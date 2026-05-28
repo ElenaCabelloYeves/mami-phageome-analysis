@@ -35,6 +35,7 @@ This table is required for binomial mixed-effects models because it retains both
 
 ```r
 presence = if_else(CPM > 0, 1L, 0L)
+```
 
 ## Genomic and metagenomic data
 
