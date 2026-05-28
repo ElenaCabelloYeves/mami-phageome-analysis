@@ -1,0 +1,344 @@
+---
+title: "Longitudinal statistical framework"
+output: html_document
+date: "2026-04-22"
+---
+```{r}
+# Load required libraries ------------------------------------
+library(here)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lme4)
+library(lmerTest)
+library(broom.mixed)
+library(writexl)
+
+# Load input data --------------------------------------------
+# We use results_with_metadata2.csv
+df <- read_csv(
+  here("data", "results_with_metadata2.csv"),
+  show_col_types = FALSE
+)
+
+# Check total number of vOTUs --------------------------------
+length(unique(df$vOTUs))
+
+# We build a vOTU-level infant dataset -----------------------
+df_votu <- df %>%
+  filter(
+    mother_infant == "infant",
+    bodysite == "stool"
+  ) %>%
+  mutate(
+    presence = if_else(CPM > 0, 1L, 0L),
+
+    subject = factor(subject),
+    vOTUs = factor(vOTUs),
+
+    timepoint_months = as.numeric(timepoint_months),
+    timepoint_scaled = as.numeric(scale(timepoint_months)),
+
+    Contact_BF = factor(Contact_BF),
+    feeding_cat = factor(feeding_cat),
+    Exclusive_BF = factor(Exclusive_BF),
+    Diet = factor(Diet),
+    delivery = factor(delivery),
+    intrapartum_ATB = factor(intrapartum_ATB)
+  )
+
+# We check number of infant stool vOTUs -------------------------
+length(unique(df_votu$vOTUs))
+
+# Count vOTU prevalence across samples -----------------------
+votu_freq <- df_votu %>%
+  group_by(vOTUs) %>%
+  summarise(
+    n_samples = sum(presence),
+    .groups = "drop"
+  )
+
+# Keep non-rare vOTUs ----------------------------------------
+votus_keep <- votu_freq %>%
+  filter(n_samples >= 2) %>%
+  pull(vOTUs)
+
+# Filter dataset excluding rare vOTUs ------------------------
+df_votu_nosing <- df_votu %>%
+  filter(vOTUs %in% votus_keep)
+
+# Check number of retained vOTUs -----------------------------
+length(unique(df_votu_nosing$vOTUs))
+
+# Fit diet model excluding rare vOTUs ------------------------
+model_bin_diet_nosing <- glmer(
+  presence ~ timepoint_scaled * Diet +
+    (1 | subject) +
+    (1 | vOTUs),
+  data = df_votu_nosing,
+  family = binomial,
+  control = glmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+
+summary(model_bin_diet_nosing)
+
+# Fit delivery model excluding rare vOTUs --------------------
+model_bin_delivery_nosing <- glmer(
+  presence ~ timepoint_scaled * delivery +
+    (1 | subject) +
+    (1 | vOTUs),
+  data = df_votu_nosing,
+  family = binomial,
+  control = glmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+
+summary(model_bin_delivery_nosing)
+
+# Fit feeding category model ---------------------------------
+model_presence_feed <- glmer(
+  presence ~ timepoint_scaled * feeding_cat +
+    (1 | subject) +
+    (1 | vOTUs),
+  data = df_votu,
+  family = binomial,
+  control = glmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+
+summary(model_presence_feed)
+
+# Build abundance dataset by sample --------------------------
+rich_df <- df_votu %>%
+  group_by(
+    Sample,
+    subject,
+    timepoint_months,
+    feeding_cat
+  ) %>%
+  summarise(
+    total_CPM = sum(CPM),
+    richness = sum(presence),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    log_total_CPM = log10(total_CPM + 1),
+    subject = factor(subject),
+    feeding_cat = factor(feeding_cat),
+    timepoint_scaled = as.numeric(scale(timepoint_months))
+  )
+
+# Fit feeding category abundance model -----------------------
+model_abundance_feed <- lmer(
+  log_total_CPM ~ timepoint_scaled * feeding_cat +
+    (1 | subject),
+  data = rich_df
+)
+
+summary(model_abundance_feed)
+anova(model_abundance_feed)
+
+# Fit feeding category model excluding rare vOTUs -------------
+model_presence_feed_nosing <- glmer(
+  presence ~ timepoint_scaled * feeding_cat +
+    (1 | subject) +
+    (1 | vOTUs),
+  data = df_votu_nosing,
+  family = binomial,
+  control = glmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+
+summary(model_presence_feed_nosing)
+```
+
+```{r}
+# We summarise sample sizes by feeding category ------------------
+n_feeding_cat <- df_votu %>%
+  select(
+    subject,
+    Sample,
+    mother_infant,
+    bodysite,
+    timepoint_months,
+    feeding_cat
+  ) %>%
+  distinct() %>%
+  filter(!is.na(feeding_cat)) %>%
+  group_by(feeding_cat) %>%
+  summarise(
+    n_samples = n(),
+    n_subjects = n_distinct(subject),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_subjects))
+
+print(n_feeding_cat)
+
+# Summarising sample sizes by feeding category and timepoint ----
+n_feeding_cat_timepoint <- df_votu %>%
+  select(
+    subject,
+    Sample,
+    timepoint_months,
+    feeding_cat
+  ) %>%
+  distinct() %>%
+  filter(!is.na(feeding_cat)) %>%
+  group_by(timepoint_months, feeding_cat) %>%
+  summarise(
+    n_samples = n(),
+    n_subjects = n_distinct(subject),
+    .groups = "drop"
+  ) %>%
+  arrange(timepoint_months, desc(n_subjects))
+
+print(n_feeding_cat_timepoint)
+
+# Summarise sample sizes by human milk exposure -------------
+n_contact_bf <- df_votu %>%
+  select(
+    subject,
+    Sample,
+    Contact_BF
+  ) %>%
+  distinct() %>%
+  filter(!is.na(Contact_BF)) %>%
+  group_by(Contact_BF) %>%
+  summarise(
+    n_samples = n(),
+    n_subjects = n_distinct(subject),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_subjects))
+
+print(n_contact_bf)
+
+# Summarise sample sizes by human milk exposure (Contact_BF) and timepoint
+n_contact_bf_timepoint <- df_votu %>%
+  select(
+    subject,
+    Sample,
+    timepoint_months,
+    Contact_BF
+  ) %>%
+  distinct() %>%
+  filter(!is.na(Contact_BF)) %>%
+  group_by(timepoint_months, Contact_BF) %>%
+  summarise(
+    n_samples = n(),
+    n_subjects = n_distinct(subject),
+    .groups = "drop"
+  ) %>%
+  arrange(timepoint_months, desc(n_subjects))
+
+print(n_contact_bf_timepoint)
+
+# Summarise sample sizes by diet ------------------------------
+n_diet <- df_votu %>%
+  select(
+    subject,
+    Sample,
+    Diet
+  ) %>%
+  distinct() %>%
+  filter(!is.na(Diet)) %>%
+  group_by(Diet) %>%
+  summarise(
+    n_samples = n(),
+    n_subjects = n_distinct(subject),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_subjects))
+
+print(n_diet)
+
+## MIXED MODELS FOR CPM ABUNDANCES 
+# Build CPM abundance dataset --------------------------------
+cpm_df <- df_votu %>%
+  group_by(
+    Sample,
+    subject,
+    timepoint_months,
+    feeding_cat,
+    Contact_BF,
+    Diet,
+    delivery,
+    intrapartum_ATB
+  ) %>%
+  summarise(
+    total_CPM = sum(CPM, na.rm = TRUE),
+    richness = sum(presence, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    log_total_CPM = log10(total_CPM + 1),
+    subject = factor(subject),
+    feeding_cat = factor(feeding_cat),
+    Contact_BF = factor(Contact_BF),
+    Diet = factor(Diet),
+    delivery = factor(delivery),
+    intrapartum_ATB = factor(intrapartum_ATB),
+    timepoint_scaled = as.numeric(scale(timepoint_months))
+  )
+
+# Fit CPM model by feeding category --------------------------
+model_cpm_feeding_cat <- lmer(
+  log_total_CPM ~ timepoint_scaled * feeding_cat +
+    (1 | subject),
+  data = cpm_df
+)
+
+summary(model_cpm_feeding_cat)
+anova(model_cpm_feeding_cat)
+
+# Fit CPM model by human milk exposure ---------------------
+model_cpm_contact_bf <- lmer(
+  log_total_CPM ~ timepoint_scaled * Contact_BF +
+    (1 | subject),
+  data = cpm_df
+)
+
+summary(model_cpm_contact_bf)
+anova(model_cpm_contact_bf)
+
+# Fit CPM model by diet --------------------------------------
+model_cpm_diet <- lmer(
+  log_total_CPM ~ timepoint_scaled * Diet +
+    (1 | subject),
+  data = cpm_df
+)
+
+summary(model_cpm_diet)
+anova(model_cpm_diet)
+
+# Fit CPM model by delivery ----------------------------------
+model_cpm_delivery <- lmer(
+  log_total_CPM ~ timepoint_scaled * delivery +
+    (1 | subject),
+  data = cpm_df
+)
+
+summary(model_cpm_delivery)
+anova(model_cpm_delivery)
+
+# Fit CPM model by intrapartum antibiotics -------------------
+model_cpm_atb <- lmer(
+  log_total_CPM ~ timepoint_scaled * intrapartum_ATB +
+    (1 | subject),
+  data = cpm_df
+)
+
+summary(model_cpm_atb)
+anova(model_cpm_atb)
+```
