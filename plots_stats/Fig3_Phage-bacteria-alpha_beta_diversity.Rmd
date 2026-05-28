@@ -1,205 +1,213 @@
 ---
-title: "Phage-bacteria alpha and beta diversities"
+title: "Final_phage-bacteria_diversities"
 output: html_document
-date: "2025-11-14"
+date: "2026-04-02"
 ---
+## Integrated script: alpha + beta diversity
+## Phages and bacteria
+## Longitudinal analysis mixed models
 
-```{r}
-## ---- Load the following libraries ----------------------
+## ---- Libraries ------------------------------------------
 library(tidyverse)
 library(readxl)
 library(vegan)
-library(rstatix)
+library(lme4)
+library(lmerTest)
+library(emmeans)
 library(ggpubr)
 library(patchwork)
 library(here)
+library(writexl)
 
-## ---- Inputs --------------------------------------------
+## ---- Inputs ---------------------------------------------
 phage_file <- here("data", "results_with_metadata.csv")
 bact_file  <- here("data", "mmc3.xlsx")
 
-## ---- Output directories --------------------------------
+## ---- Output directories ---------------------------------
 fig_dir       <- here("results", "figures", "alpha_beta_diversity")
 fig_phage_dir <- file.path(fig_dir, "phages")
 fig_bact_dir  <- file.path(fig_dir, "bacteria")
 
+tab_dir       <- here("results", "tables", "alpha_beta_diversity")
+tab_phage_dir <- file.path(tab_dir, "phages")
+tab_bact_dir  <- file.path(tab_dir, "bacteria")
+
 dir.create(fig_dir,       recursive = TRUE, showWarnings = FALSE)
 dir.create(fig_phage_dir, recursive = TRUE, showWarnings = FALSE)
 dir.create(fig_bact_dir,  recursive = TRUE, showWarnings = FALSE)
+dir.create(tab_dir,       recursive = TRUE, showWarnings = FALSE)
+dir.create(tab_phage_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(tab_bact_dir,  recursive = TRUE, showWarnings = FALSE)
 
-## ---- Colors --------------------------------------------
+## ---- Colors ---------------------------------------------
 cols_time <- c(
-  "1 week"   = "blue",
-  "1 month"  = "darkgreen",
-  "6 months" = "mediumaquamarine",
-  "12 months"= "gold",
-  "mothers"  = "purple4"
+  "1 week"    = "blue",
+  "1 month"   = "darkgreen",
+  "6 months"  = "mediumaquamarine",
+  "12 months" = "gold",
+  "mothers"   = "purple4"
 )
 
-## ---- Load data from phages -----------------------------
+time_levels <- c("1 week", "1 month", "6 months", "12 months", "mothers")
+infant_levels <- c("1 week", "1 month", "6 months", "12 months")
+
+## ---- Helper functions -----------------------------------
+
+make_timepoint_label <- function(timepoint_months, mother_infant, bodysite) {
+  case_when(
+    timepoint_months == 0.25 & mother_infant == "infant" ~ "1 week",
+    timepoint_months == 1    & mother_infant == "infant" ~ "1 month",
+    timepoint_months == 6    & mother_infant == "infant" ~ "6 months",
+    timepoint_months == 12   & mother_infant == "infant" ~ "12 months",
+    timepoint_months == 1    & mother_infant == "mother" & bodysite == "stool" ~ "mothers",
+    TRUE ~ NA_character_
+  )
+}
+
+plot_alpha_box <- function(df, title_text) {
+  ggplot(df, aes(x = timepoint_label, y = shannon, fill = timepoint_label)) +
+    geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+    geom_jitter(aes(color = timepoint_label), width = 0.2, size = 1.5) +
+    scale_fill_manual(values = cols_time, drop = FALSE) +
+    scale_color_manual(values = cols_time, drop = FALSE) +
+    labs(
+      title = title_text,
+      x = "Age / group",
+      y = "Shannon index"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      plot.title  = element_text(hjust = 0.5),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank()
+    )
+}
+
+save_plot_pdf_png <- function(plot_obj, out_base, width = 9, height = 7) {
+  ggsave(paste0(out_base, ".png"), plot_obj, width = width, height = height, dpi = 300)
+  ggsave(paste0(out_base, ".pdf"), plot_obj, width = width, height = height, device = cairo_pdf)
+}
+
+## LOAD phage data -----------------------------------------------------------
+
 df_phage <- read.csv(phage_file, stringsAsFactors = FALSE)
 
-## ---- Abundance in CPM per vOTU -------------------------
+## Metadata INCLUDING subject
+phage_meta <- df_phage %>%
+  select(Sample, subject, timepoint_months, mother_infant, bodysite) %>%
+  distinct() %>%
+  mutate(
+    timepoint_label = make_timepoint_label(timepoint_months, mother_infant, bodysite),
+    timepoint_label = factor(timepoint_label, levels = time_levels),
+    subject = factor(subject)
+  ) %>%
+  filter(!is.na(timepoint_label))
+
+## Phage abundance matrix: rows = samples, cols = vOTUs
 phage_abundance <- df_phage %>%
   select(Sample, vOTUs, CPM) %>%
   pivot_wider(names_from = vOTUs, values_from = CPM, values_fill = 0)
 
-## ---- Load the specific metadata ------------------------
-# Metadata 
-phage_meta <- df_phage %>%
-  select(Sample, timepoint_months, mother_infant, bodysite) %>%
-  distinct()
-
-# Abundance matrixes: rows are samples, columns are vOTUs
 phage_mat <- phage_abundance %>%
   column_to_rownames("Sample") %>%
   as.matrix()
 
-# Shannon phages
+## Align phage matrix with metadata
+common_phage_samples <- intersect(rownames(phage_mat), phage_meta$Sample)
+phage_mat <- phage_mat[common_phage_samples, , drop = FALSE]
+phage_meta_use <- phage_meta %>%
+  filter(Sample %in% common_phage_samples) %>%
+  arrange(match(Sample, common_phage_samples))
+
+stopifnot(all(rownames(phage_mat) == phage_meta_use$Sample))
+
+## Shannon phage
 shannon_phage <- diversity(phage_mat, index = "shannon")
 
-# stool_data
-stool_data <- phage_meta %>%
+alpha_phage <- phage_meta_use %>%
   mutate(
-    shannon_index = shannon_phage[Sample],
-    timepoint_label = case_when(
-      timepoint_months == 0.25 & mother_infant == "infant" ~ "1 week",
-      timepoint_months == 1    & mother_infant == "infant" ~ "1 month",
-      timepoint_months == 6    & mother_infant == "infant" ~ "6 months",
-      timepoint_months == 12   & mother_infant == "infant" ~ "12 months",
-      timepoint_months == 1    & mother_infant == "mother" & bodysite == "stool" ~ "mothers"
-    )
+    shannon   = unname(shannon_phage[Sample]),
+    community = "phage"
   ) %>%
-  filter(!is.na(timepoint_label)) %>%
-  mutate(
-    timepoint_label = factor(timepoint_label,
-                             levels = c("1 week", "1 month", "6 months", "12 months", "mothers"))
-  )
+  select(Sample, subject, timepoint_label, mother_infant, bodysite, community, shannon)
 
-# Df of alpha diversity for phages
-alpha_phage <- stool_data %>%
-  select(Sample, timepoint_label, shannon_index) %>%
-  mutate(
-    community = "phage",
-    shannon   = shannon_index
-  )
 
-## ---- Load data from bacteria -----------------------------
+## LOAD bacteria data -----------------------------------------------------------
+
 bact_raw <- read_excel(bact_file)
 stopifnot("clade_name" %in% names(bact_raw))
 
-# Values 0–100 
+## Convert abundance values from 0–100 to proportions
 bact_num <- bact_raw %>%
   mutate(across(-clade_name, ~ as.numeric(gsub(",", ".", as.character(.))) / 100))
 
-# Taxons x samples
+## Rows = taxa, columns = samples
 bact_mat <- bact_num %>%
   select(-clade_name) %>%
   as.matrix()
 rownames(bact_mat) <- bact_num$clade_name
 
-# Transpose: rows are samples, columns are taxons
+## Transpose: rows = samples, cols = taxa
 bact_mat_t <- t(bact_mat)
 
-# Shannon bacterias
+## Match bacterial samples to metadata
+bact_sample_names <- rownames(bact_mat_t)
+common_bact_samples <- intersect(bact_sample_names, phage_meta$Sample)
+
+bact_mat_t <- bact_mat_t[common_bact_samples, , drop = FALSE]
+bact_meta_use <- phage_meta %>%
+  filter(Sample %in% common_bact_samples) %>%
+  arrange(match(Sample, common_bact_samples))
+
+stopifnot(all(rownames(bact_mat_t) == bact_meta_use$Sample))
+
+## Shannon bacteria
 shannon_bact <- diversity(bact_mat_t, index = "shannon")
 
-# Df with Sample + Shannon
-bact_alpha_df <- data.frame(
-  Sample       = rownames(bact_mat_t),
-  shannon_bact = shannon_bact,
-  row.names    = NULL
-)
-
-# Same metadata as phages for bacteria
-bact_alpha_df <- bact_alpha_df %>%
-  inner_join(phage_meta, by = "Sample") %>%
+alpha_bact <- bact_meta_use %>%
   mutate(
-    timepoint_label = case_when(
-      timepoint_months == 0.25 & mother_infant == "infant" ~ "1 week",
-      timepoint_months == 1    & mother_infant == "infant" ~ "1 month",
-      timepoint_months == 6    & mother_infant == "infant" ~ "6 months",
-      timepoint_months == 12   & mother_infant == "infant" ~ "12 months",
-      timepoint_months == 1    & mother_infant == "mother" & bodysite == "stool" ~ "mothers"
-    )
+    shannon   = unname(shannon_bact[Sample]),
+    community = "bacteria"
   ) %>%
-  filter(!is.na(timepoint_label)) %>%
-  mutate(
-    timepoint_label = factor(timepoint_label,
-                             levels = c("1 week", "1 month", "6 months", "12 months", "mothers"))
-  )
+  select(Sample, subject, timepoint_label, mother_infant, bodysite, community, shannon)
 
-alpha_bact <- bact_alpha_df %>%
-  select(Sample, timepoint_label, shannon_bact) %>%
-  mutate(
-    community = "bacteria",
-    shannon   = shannon_bact
-  )
+## ALPHA DIVERSITY ---------------------------------------------------------
 
-## ---- Alpha diversity -------------------------------------
-
-# Combine in an object
 alpha_combined <- bind_rows(alpha_phage, alpha_bact) %>%
   mutate(
-    timepoint_label = factor(timepoint_label,
-                             levels = c("1 week", "1 month", "6 months", "12 months", "mothers")),
-    community       = factor(community, levels = c("phage", "bacteria"))
+    community = factor(community, levels = c("phage", "bacteria")),
+    timepoint_label = factor(timepoint_label, levels = time_levels),
+    subject = factor(subject),
+    Sample = factor(Sample)
   )
 
-# Alpha diversity of phages
-p_alpha_phage <- ggplot(alpha_phage,
-                        aes(x = timepoint_label, y = shannon, fill = timepoint_label)) +
-  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
-  geom_jitter(aes(color = timepoint_label), width = 0.2, size = 1.5) +
-  scale_fill_manual(values = cols_time) +
-  scale_color_manual(values = cols_time) +
-  labs(
-    title = "Alpha diversity (Shannon) – Phage community",
-    x = "Age / group",
-    y = "Shannon index"
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    axis.text.x = element_text(angle = 45, hjust = 1),
-    plot.title  = element_text(hjust = 0.5)
-  )
+## Longitudinal infant-only datasets
+alpha_phage_infants <- alpha_phage %>%
+  filter(timepoint_label %in% infant_levels) %>%
+  mutate(timepoint_label = factor(timepoint_label, levels = infant_levels))
 
-ggsave(file.path(fig_phage_dir, "alpha_phage.png"),
-       p_alpha_phage, width = 9, height = 7, dpi = 300)
+alpha_bact_infants <- alpha_bact %>%
+  filter(timepoint_label %in% infant_levels) %>%
+  mutate(timepoint_label = factor(timepoint_label, levels = infant_levels))
 
-# Alpha diversity of bacteria
-p_alpha_bact <- ggplot(alpha_bact,
-                       aes(x = timepoint_label, y = shannon, fill = timepoint_label)) +
-  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
-  geom_jitter(aes(color = timepoint_label), width = 0.2, size = 1.5) +
-  scale_fill_manual(values = cols_time) +
-  scale_color_manual(values = cols_time) +
-  labs(
-    title = "Alpha diversity (Shannon) – Bacterial community",
-    x = "Age / group",
-    y = "Shannon index"
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    axis.text.x = element_text(angle = 45, hjust = 1),
-    plot.title  = element_text(hjust = 0.5)
-  )
+alpha_combined_infants <- alpha_combined %>%
+  filter(timepoint_label %in% infant_levels) %>%
+  mutate(timepoint_label = factor(timepoint_label, levels = infant_levels))
 
-ggsave(file.path(fig_bact_dir, "alpha_bacteria.png"),
-       p_alpha_bact, width = 9, height = 7, dpi = 300)
+## ALPHA DIVERSITY plots ------------------------------------------------------
 
-ggsave(file.path(fig_bact_dir, "alpha_bacteria.pdf"),
-       p_alpha_bact, width = 9, height = 7)
+p_alpha_phage <- plot_alpha_box(alpha_phage, "Alpha diversity (Shannon) – Phage community")
+p_alpha_bact  <- plot_alpha_box(alpha_bact,  "Alpha diversity (Shannon) – Bacterial community")
 
-
-# ---- Alpha diversity phage + bacteria together  ----
-p_alpha_both <- ggplot(alpha_combined,
-                       aes(x = timepoint_label, y = shannon,
-                           fill = timepoint_label, color = timepoint_label)) +
+p_alpha_both <- ggplot(
+  alpha_combined,
+  aes(x = timepoint_label, y = shannon, fill = timepoint_label, color = timepoint_label)
+) +
   geom_boxplot(
     aes(alpha = community),
     position = position_dodge(width = 0.7),
-    width    = 0.6,
+    width = 0.6,
     outlier.shape = NA
   ) +
   geom_jitter(
@@ -207,117 +215,202 @@ p_alpha_both <- ggplot(alpha_combined,
     position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.7),
     size = 1.2
   ) +
-  scale_fill_manual(values = cols_time) +
-  scale_color_manual(values = cols_time) +
-  scale_alpha_manual(
-    values = c(phage = 0.5, bacteria = 0.9),
-    name   = "Community"
-  ) +
+  scale_fill_manual(values = cols_time, drop = FALSE) +
+  scale_color_manual(values = cols_time, drop = FALSE) +
+  scale_alpha_manual(values = c(phage = 0.5, bacteria = 0.9), name = "Community") +
   labs(
-    title = "Alpha diversity (Shannon) – Phage vs bacteria",
+    title = "Alpha diversity (Shannon) – Phage vs bacterial communities",
     x = "Age / group",
     y = "Shannon index"
   ) +
   theme_minimal(base_size = 12) +
   theme(
     axis.text.x = element_text(angle = 45, hjust = 1),
-    plot.title  = element_text(hjust = 0.5)
+    plot.title  = element_text(hjust = 0.5),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
   )
 
-ggsave(file.path(fig_dir, "alpha_phage_bacteria_together.png"),
-       p_alpha_both, width = 9, height = 7, dpi = 300)
+save_plot_pdf_png(p_alpha_phage, file.path(fig_phage_dir, "alpha_phage"))
+save_plot_pdf_png(p_alpha_bact,  file.path(fig_bact_dir,  "alpha_bacteria"))
+save_plot_pdf_png(p_alpha_both,  file.path(fig_dir,       "alpha_phage_bacteria_together"))
 
-ggsave(
-  file.path(fig_dir, "alpha_phage_bacteria_together.pdf"),
-  plot = p_alpha_both,
-  device = cairo_pdf,   # recomendado para paper
-  width = 9,
-  height = 7,
-  units = "in"
+## ALPHA DIVERSITY stats ---------------------------------------------------------
+## Main longitudinal analysis = infants only
+
+## ---- Phages only ----------------------------------------
+model_alpha_phage <- lmer(
+  shannon ~ timepoint_label + (1 | subject),
+  data = alpha_phage_infants
 )
 
-## ---- Beta diversity of phages (PCoA Bray–Curtis)----------
-OTUDistMat <- vegdist(phage_mat, method = "bray")
+anova_alpha_phage   <- anova(model_alpha_phage)
+emmeans_alpha_phage <- emmeans(model_alpha_phage, pairwise ~ timepoint_label)
 
-pcoa_result <- cmdscale(OTUDistMat, eig = TRUE, k = 2)
-eig_vals    <- pcoa_result$eig
-var_expl    <- eig_vals / sum(eig_vals) * 100
+write_xlsx(
+  list(
+    anova   = as.data.frame(anova_alpha_phage),
+    emmeans = as.data.frame(emmeans_alpha_phage$emmeans),
+    contrasts = as.data.frame(emmeans_alpha_phage$contrasts)
+  ),
+  file.path(tab_phage_dir, "alpha_phage_mixed_model.xlsx")
+)
 
-pcoa_coords <- as.data.frame(pcoa_result$points)
-colnames(pcoa_coords) <- c("PCoA1", "PCoA2")
-pcoa_coords$Sample <- rownames(pcoa_coords)
+## ---- Bacteria only --------------------------------------
+model_alpha_bact <- lmer(
+  shannon ~ timepoint_label + (1 | subject),
+  data = alpha_bact_infants
+)
 
-metaDataFinal <- stool_data %>% select(Sample, timepoint_label, bodysite, mother_infant)
-PCoA_df <- pcoa_coords %>%
-  inner_join(metaDataFinal, by = "Sample") %>%
-  filter(bodysite != "breastmilk")
+anova_alpha_bact   <- anova(model_alpha_bact)
+emmeans_alpha_bact <- emmeans(model_alpha_bact, pairwise ~ timepoint_label)
 
-pcoa_phage_plot <- ggplot(PCoA_df,
-                          aes(x = PCoA1, y = PCoA2, color = timepoint_label)) +
+write_xlsx(
+  list(
+    anova   = as.data.frame(anova_alpha_bact),
+    emmeans = as.data.frame(emmeans_alpha_bact$emmeans),
+    contrasts = as.data.frame(emmeans_alpha_bact$contrasts)
+  ),
+  file.path(tab_bact_dir, "alpha_bacteria_mixed_model.xlsx")
+)
+
+## ---- Combined phage vs bacteria -------------------------
+## Because phage and bacteria are paired within the same sample,
+## use random intercept for subject and Sample
+model_alpha_combined <- lmer(
+  shannon ~ timepoint_label * community + (1 | subject) + (1 | Sample),
+  data = alpha_combined_infants
+)
+
+anova_alpha_combined <- anova(model_alpha_combined)
+emmeans_alpha_combined <- emmeans(model_alpha_combined, pairwise ~ timepoint_label | community)
+emmeans_alpha_between  <- emmeans(model_alpha_combined, pairwise ~ community | timepoint_label)
+
+write_xlsx(
+  list(
+    anova = as.data.frame(anova_alpha_combined),
+    emmeans_time_within_community = as.data.frame(emmeans_alpha_combined$emmeans),
+    contrasts_time_within_community = as.data.frame(emmeans_alpha_combined$contrasts),
+    emmeans_community_within_time = as.data.frame(emmeans_alpha_between$emmeans),
+    contrasts_community_within_time = as.data.frame(emmeans_alpha_between$contrasts)
+  ),
+  file.path(tab_dir, "alpha_combined_phage_vs_bacteria_mixed_model.xlsx")
+)
+
+## mothers vs 12 months -----------------------------------------------------------------------
+## Cross-sectional only, not longitudinal
+alpha_phage_mothers12 <- alpha_phage %>%
+  filter(timepoint_label %in% c("12 months", "mothers")) %>%
+  mutate(timepoint_label = droplevels(timepoint_label))
+
+alpha_bact_mothers12 <- alpha_bact %>%
+  filter(timepoint_label %in% c("12 months", "mothers")) %>%
+  mutate(timepoint_label = droplevels(timepoint_label))
+
+wilcox_phage_mothers12 <- wilcox.test(shannon ~ timepoint_label, data = alpha_phage_mothers12)
+wilcox_bact_mothers12  <- wilcox.test(shannon ~ timepoint_label, data = alpha_bact_mothers12)
+
+write_xlsx(
+  list(
+    phage_12m_vs_mothers = broom::tidy(wilcox_phage_mothers12),
+    bacteria_12m_vs_mothers = broom::tidy(wilcox_bact_mothers12)
+  ),
+  file.path(tab_dir, "alpha_secondary_12months_vs_mothers.xlsx")
+)
+
+## BETA DIVERSITY - phages  --------------------------------------------------------
+
+## Infant-only for longitudinal beta diversity
+phage_beta_meta <- phage_meta_use %>%
+  filter(timepoint_label %in% infant_levels) %>%
+  mutate(timepoint_label = factor(timepoint_label, levels = infant_levels))
+
+phage_beta_samples <- phage_beta_meta$Sample
+phage_beta_mat <- phage_mat[phage_beta_samples, , drop = FALSE]
+
+## Bray-Curtis
+phage_bc <- vegdist(phage_beta_mat, method = "bray")
+
+## PCoA
+phage_pcoa <- cmdscale(phage_bc, eig = TRUE, k = 2)
+phage_eig <- phage_pcoa$eig
+phage_var_expl <- phage_eig / sum(phage_eig[phage_eig > 0]) * 100
+
+phage_coords <- as.data.frame(phage_pcoa$points)
+colnames(phage_coords) <- c("PCoA1", "PCoA2")
+phage_coords$Sample <- rownames(phage_coords)
+
+phage_pcoa_df <- phage_coords %>%
+  left_join(phage_beta_meta, by = "Sample")
+
+p_beta_phage <- ggplot(phage_pcoa_df, aes(PCoA1, PCoA2, color = timepoint_label)) +
   geom_point(size = 2, alpha = 0.8) +
-  stat_ellipse(aes(group = timepoint_label, color = timepoint_label),
-               type = "t", linetype = "dashed") +
-  scale_color_manual(values = cols_time, name = "Age") +
+  stat_ellipse(aes(group = timepoint_label), type = "t", linetype = "dashed") +
+  scale_color_manual(values = cols_time[names(cols_time) %in% infant_levels]) +
   labs(
-    title = "Phage vOTU PCoA – Bray-Curtis",
-    x = paste0("PCoA1 [", round(var_expl[1], 1), "%]"),
-    y = paste0("PCoA2 [", round(var_expl[2], 1), "%]")
+    title = "Phage community PCoA – Bray-Curtis",
+    x = paste0("PCoA1 [", round(phage_var_expl[1], 1), "%]"),
+    y = paste0("PCoA2 [", round(phage_var_expl[2], 1), "%]")
   ) +
   theme_bw(base_size = 12) +
   theme(
-    plot.title        = element_text(hjust = 0.5),
-    panel.grid.major  = element_blank(),
-    panel.grid.minor  = element_blank()
+    plot.title = element_text(hjust = 0.5),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
   )
 
-ggsave(file.path(fig_phage_dir, "beta_phage_pcoa.png"),
-       pcoa_phage_plot, width = 9, height = 8, dpi = 300)
+save_plot_pdf_png(p_beta_phage, file.path(fig_phage_dir, "beta_phage_pcoa"), width = 9, height = 8)
 
-ggsave(file.path(fig_phage_dir, "beta_phage_pcoa.pdf"),
-       pcoa_phage_plot, width = 9, height = 8)
+## PERMANOVA with subject strata
+adonis_phage <- adonis2(
+  phage_bc ~ timepoint_label,
+  data = phage_beta_meta,
+  permutations = 999,
+  strata = phage_beta_meta$subject
+)
 
-# PERMANOVA phages
-otu_samples  <- labels(OTUDistMat)
-meta_samples <- PCoA_df$Sample
-common_samples <- intersect(otu_samples, meta_samples)
+## Check homogeneity of dispersion
+bd_phage <- betadisper(phage_bc, phage_beta_meta$timepoint_label)
+anova_bd_phage <- anova(bd_phage)
+perm_bd_phage  <- permutest(bd_phage, permutations = 999)
 
-meta_filtered <- PCoA_df %>%
-  filter(Sample %in% common_samples) %>%
-  arrange(match(Sample, common_samples))
+write_xlsx(
+  list(
+    permanova = as.data.frame(adonis_phage),
+    betadisper_anova = as.data.frame(anova_bd_phage),
+    betadisper_permutest = as.data.frame(perm_bd_phage$tab)
+  ),
+  file.path(tab_phage_dir, "beta_phage_permanova_betadisper.xlsx")
+)
 
-dist_matrix_filtered <- as.dist(as.matrix(OTUDistMat)[common_samples, common_samples])
+## BETA DIVERSITY - bacteria  --------------------------------------------------------
 
-meta_filtered$timepoint_label <- factor(meta_filtered$timepoint_label)
+bact_beta_meta <- bact_meta_use %>%
+  filter(timepoint_label %in% infant_levels) %>%
+  mutate(timepoint_label = factor(timepoint_label, levels = infant_levels))
 
-adonis_phage <- adonis2(dist_matrix_filtered ~ timepoint_label,
-                        data = meta_filtered, permutations = 999)
-print(adonis_phage)
+bact_beta_samples <- bact_beta_meta$Sample
+bact_beta_mat <- bact_mat_t[bact_beta_samples, , drop = FALSE]
 
-## ---- Beta diversity of bacteria (PCoA Bray–Curtis)---------
+## Bray-Curtis
+bact_bc <- vegdist(bact_beta_mat, method = "bray")
 
-bact_bc <- vegdist(bact_mat_t, method = "bray")
-
+## PCoA
 bact_pcoa <- cmdscale(bact_bc, eig = TRUE, k = 2)
-bact_eig  <- bact_pcoa$eig
-bact_var_expl <- bact_eig / sum(bact_eig) * 100
+bact_eig <- bact_pcoa$eig
+bact_var_expl <- bact_eig / sum(bact_eig[bact_eig > 0]) * 100
 
 bact_coords <- as.data.frame(bact_pcoa$points)
 colnames(bact_coords) <- c("PCoA1", "PCoA2")
 bact_coords$Sample <- rownames(bact_coords)
 
-bact_meta_for_pcoa <- bact_alpha_df %>%
-  select(Sample, timepoint_label) %>%
-  distinct()
-
 bact_pcoa_df <- bact_coords %>%
-  inner_join(bact_meta_for_pcoa, by = "Sample")
+  left_join(bact_beta_meta, by = "Sample")
 
-pcoa_bact_plot <- ggplot(bact_pcoa_df,
-                         aes(x = PCoA1, y = PCoA2, color = timepoint_label)) +
+p_beta_bact <- ggplot(bact_pcoa_df, aes(PCoA1, PCoA2, color = timepoint_label)) +
   geom_point(size = 2, alpha = 0.8) +
-  stat_ellipse(aes(group = timepoint_label, color = timepoint_label),
-               type = "t", linetype = "dashed") +
-  scale_color_manual(values = cols_time, name = "Age") +
+  stat_ellipse(aes(group = timepoint_label), type = "t", linetype = "dashed") +
+  scale_color_manual(values = cols_time[names(cols_time) %in% infant_levels]) +
   labs(
     title = "Bacterial community PCoA – Bray-Curtis",
     x = paste0("PCoA1 [", round(bact_var_expl[1], 1), "%]"),
@@ -325,60 +418,66 @@ pcoa_bact_plot <- ggplot(bact_pcoa_df,
   ) +
   theme_bw(base_size = 12) +
   theme(
-    plot.title        = element_text(hjust = 0.5),
-    panel.grid.major  = element_blank(),
-    panel.grid.minor  = element_blank()
+    plot.title = element_text(hjust = 0.5),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
   )
 
-ggsave(file.path(fig_bact_dir, "beta_bacteria_pcoa.png"),
-       pcoa_bact_plot, width = 9, height = 8, dpi = 300)
+save_plot_pdf_png(p_beta_bact, file.path(fig_bact_dir, "beta_bacteria_pcoa"), width = 9, height = 8)
 
-# PDF
-ggsave(file.path(fig_bact_dir, "beta_bacteria_pcoa.pdf"),
-       pcoa_bact_plot, width = 9, height = 8)
-
-
-## ---- PERMANOVA BACTERIA ----
-
-samples_bact <- bact_pcoa_df$Sample
-
-bact_mat_sub <- bact_mat_t[samples_bact, , drop = FALSE]
-
-dist_bact_sub <- vegdist(bact_mat_sub, method = "bray")
-
-meta_bact_sub <- bact_pcoa_df %>%
-  select(Sample, timepoint_label) %>%
-  mutate(timepoint_label = factor(timepoint_label)) %>%
-  arrange(match(Sample, samples_bact))
-
-stopifnot(
-  nrow(meta_bact_sub) == attr(dist_bact_sub, "Size"),
-  all(meta_bact_sub$Sample == samples_bact)
-)
-
+## PERMANOVA with subject strata
 adonis_bact <- adonis2(
-  dist_bact_sub ~ timepoint_label,
-  data = meta_bact_sub,
-  permutations = 999
+  bact_bc ~ timepoint_label,
+  data = bact_beta_meta,
+  permutations = 999,
+  strata = bact_beta_meta$subject
 )
 
-print(adonis_bact)
+## Check homogeneity of dispersion
+bd_bact <- betadisper(bact_bc, bact_beta_meta$timepoint_label)
+anova_bd_bact <- anova(bd_bact)
+perm_bd_bact  <- permutest(bd_bact, permutations = 999)
 
-## ---- PANEL beta phages vs bacteria -----------------------
+write_xlsx(
+  list(
+    permanova = as.data.frame(adonis_bact),
+    betadisper_anova = as.data.frame(anova_bd_bact),
+    betadisper_permutest = as.data.frame(perm_bd_bact$tab)
+  ),
+  file.path(tab_bact_dir, "beta_bacteria_permanova_betadisper.xlsx")
+)
 
-p_beta_both <- pcoa_phage_plot + pcoa_bact_plot +
+
+## BETA DIVERSITY - phage vs bacteria panel -------------------------------------------
+
+p_beta_both <- p_beta_phage + p_beta_bact +
   plot_layout(nrow = 1) +
   plot_annotation(title = "Beta diversity – Phage vs bacterial communities")
 
-ggsave(file.path(fig_dir, "beta_phage_bacteria_side_by_side.png"),
-       p_beta_both, width = 14, height = 7, dpi = 300)
-
-# PDF
-ggsave(
-  file.path(fig_dir, "beta_phage_bacteria_side_by_side.pdf"),
+save_plot_pdf_png(
   p_beta_both,
+  file.path(fig_dir, "beta_phage_bacteria_side_by_side"),
   width = 14, height = 7
 )
 
+## =========================================================
+## 9. SAVE MODEL SUMMARIES TO TXT
+## =========================================================
+
+capture.output(summary(model_alpha_phage),
+               file = file.path(tab_phage_dir, "alpha_phage_model_summary.txt"))
+capture.output(summary(model_alpha_bact),
+               file = file.path(tab_bact_dir, "alpha_bacteria_model_summary.txt"))
+capture.output(summary(model_alpha_combined),
+               file = file.path(tab_dir, "alpha_combined_model_summary.txt"))
+
+capture.output(adonis_phage,
+               file = file.path(tab_phage_dir, "beta_phage_permanova.txt"))
+capture.output(adonis_bact,
+               file = file.path(tab_bact_dir, "beta_bacteria_permanova.txt"))
 ```
+
+
+
+
 
