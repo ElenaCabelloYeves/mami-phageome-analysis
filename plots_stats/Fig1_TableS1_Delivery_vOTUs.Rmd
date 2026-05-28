@@ -1,0 +1,329 @@
+---
+title: "Delivery vOTUs sharing"
+output: html_document
+date: "2026-05-28"
+---
+```{r}
+# Load required libraries ------------------------------------
+library(here)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lme4)
+library(lmerTest)
+
+# Load input data --------------------------------------------
+df <- read_csv(
+  here("data", "results_with_metadata.csv"),
+  show_col_types = FALSE
+)
+
+# Create delivery categories ---------------------------------
+df <- df %>%
+  mutate(
+    delivery3 = case_when(
+      grepl("home", tolower(delivery)) ~ "home_vaginal",
+      grepl("vag", tolower(delivery)) ~ "hospital_vaginal",
+      grepl("ces|c-sec|csec|csection", tolower(delivery)) ~ "c_section",
+      TRUE ~ NA_character_
+    )
+  )
+
+# Prepare longitudinal dataset -------------------------------
+df3 <- df %>%
+  filter(
+    bodysite == "stool",
+    mother_infant %in% c("mother", "infant"),
+    !is.na(delivery3)
+  ) %>%
+  mutate(
+    present = if_else(CPM > 0, 1L, 0L),
+    dyad = family,
+    delivery3 = factor(
+      delivery3,
+      levels = c(
+        "home_vaginal",
+        "hospital_vaginal",
+        "c_section"
+      )
+    )
+  )
+
+# Build maternal presence table ------------------------------
+mother_pa <- df3 %>%
+  filter(mother_infant == "mother") %>%
+  group_by(dyad, vOTUs, delivery3) %>%
+  summarise(
+    mother = max(present),
+    .groups = "drop"
+  )
+
+# Build infant presence table --------------------------------
+infant_pa <- df3 %>%
+  filter(mother_infant == "infant") %>%
+  group_by(dyad, timepoint_months, vOTUs, delivery3) %>%
+  summarise(
+    infant = max(present),
+    .groups = "drop"
+  )
+
+# Merge maternal and infant presence -------------------------
+presence_long <- full_join(
+  mother_pa,
+  infant_pa,
+  by = c("dyad", "vOTUs", "delivery3")
+) %>%
+  mutate(
+    mother = if_else(is.na(mother), 0L, mother),
+    infant = if_else(is.na(infant), 0L, infant)
+  ) %>%
+  filter(!is.na(timepoint_months))
+
+# Calculate overlap metrics ----------------------------------
+overlap_long <- presence_long %>%
+  group_by(dyad, delivery3, timepoint_months) %>%
+  summarise(
+    shared = sum(mother == 1 & infant == 1),
+    n_inf = sum(infant == 1),
+    n_mom = sum(mother == 1),
+    union = sum((mother + infant) > 0),
+
+    pct_shared = if_else(
+      n_inf > 0,
+      shared / n_inf,
+      NA_real_
+    ),
+
+    jaccard = if_else(
+      union > 0,
+      shared / union,
+      NA_real_
+    ),
+
+    sorensen = if_else(
+      (n_inf + n_mom) > 0,
+      2 * shared / (n_inf + n_mom),
+      NA_real_
+    ),
+
+    .groups = "drop"
+  ) %>%
+  mutate(
+    timepoint_scaled = as.numeric(scale(timepoint_months))
+  )
+
+# Generate descriptive statistics ----------------------------
+summary_overlap <- overlap_long %>%
+  group_by(delivery3) %>%
+  summarise(
+    n_obs = n(),
+    n_dyads = n_distinct(dyad),
+
+    mean_shared = mean(shared, na.rm = TRUE),
+    median_shared = median(shared, na.rm = TRUE),
+
+    mean_pct_shared = mean(pct_shared, na.rm = TRUE),
+    mean_jaccard = mean(jaccard, na.rm = TRUE),
+    mean_sorensen = mean(sorensen, na.rm = TRUE),
+
+    .groups = "drop"
+  )
+
+print(summary_overlap)
+
+# Fit mixed-effects models -----------------------------------
+model_shared <- lmer(
+  shared ~ delivery3 + timepoint_scaled + (1 | dyad),
+  data = overlap_long
+)
+
+summary(model_shared)
+anova(model_shared)
+
+model_pct_shared <- lmer(
+  pct_shared ~ delivery3 + timepoint_scaled + (1 | dyad),
+  data = overlap_long
+)
+
+summary(model_pct_shared)
+anova(model_pct_shared)
+
+model_jaccard <- lmer(
+  jaccard ~ delivery3 + timepoint_scaled + (1 | dyad),
+  data = overlap_long
+)
+
+summary(model_jaccard)
+anova(model_jaccard)
+
+model_sorensen <- lmer(
+  sorensen ~ delivery3 + timepoint_scaled + (1 | dyad),
+  data = overlap_long
+)
+
+summary(model_sorensen)
+anova(model_sorensen)
+
+# Fit interaction model --------------------------------------
+model_jaccard_int <- lmer(
+  jaccard ~ delivery3 * timepoint_scaled + (1 | dyad),
+  data = overlap_long
+)
+
+summary(model_jaccard_int)
+anova(model_jaccard_int)
+
+# Plot overlap metrics ---------------------------------------
+ggplot(
+  overlap_long,
+  aes(
+    x = delivery3,
+    y = jaccard,
+    color = delivery3
+  )
+) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.12, alpha = 0.7) +
+  theme_classic() +
+  labs(
+    x = "Delivery category",
+    y = "Mother–infant Jaccard similarity"
+  )
+
+ggplot(
+  overlap_long,
+  aes(
+    x = timepoint_months,
+    y = jaccard,
+    color = delivery3
+  )
+) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE) +
+  theme_classic() +
+  labs(
+    x = "Infant age (months)",
+    y = "Mother–infant Jaccard similarity"
+  )
+
+# Build infant richness dataset ------------------------------
+df_infant <- df %>%
+  filter(
+    mother_infant == "infant",
+    bodysite == "stool",
+    !is.na(delivery3)
+  ) %>%
+  mutate(
+    present = if_else(CPM > 0, 1L, 0L),
+
+    delivery3 = factor(
+      delivery3,
+      levels = c(
+        "home_vaginal",
+        "hospital_vaginal",
+        "c_section"
+      )
+    )
+  )
+
+# Calculate infant richness ----------------------------------
+df_counts <- df_infant %>%
+  group_by(
+    Sample,
+    subject,
+    delivery3,
+    timepoint_months
+  ) %>%
+  summarise(
+    n_vOTUs = sum(present),
+    total_CPM = sum(CPM),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    log_total_CPM = log10(total_CPM + 1),
+    timepoint_scaled = as.numeric(scale(timepoint_months))
+  )
+
+# Fit richness model -----------------------------------------
+model_nvotus <- lmer(
+  n_vOTUs ~
+    log_total_CPM +
+    delivery3 +
+    timepoint_scaled +
+    (1 | subject),
+
+  data = df_counts
+)
+
+summary(model_nvotus)
+anova(model_nvotus)
+
+# Fit total viral abundance model ----------------------------
+model_cpm <- lmer(
+  log_total_CPM ~
+    delivery3 +
+    timepoint_scaled +
+    (1 | subject),
+
+  data = df_counts
+)
+
+summary(model_cpm)
+anova(model_cpm)
+
+# Plot richness and abundance --------------------------------
+ggplot(
+  df_counts,
+  aes(
+    x = total_CPM,
+    y = n_vOTUs,
+    color = delivery3
+  )
+) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE) +
+  theme_classic() +
+  labs(
+    x = "Total CPM",
+    y = "Number of detected vOTUs"
+  )
+
+ggplot(
+  df_counts,
+  aes(
+    x = delivery3,
+    y = n_vOTUs,
+    color = delivery3
+  )
+) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.12, alpha = 0.7) +
+  theme_classic() +
+  labs(
+    x = "Delivery category",
+    y = "Number of detected vOTUs"
+  )
+```
+
+```{r}
+# Export results tables --------------------------------------
+write.csv(
+  summary_overlap,
+  "summary_overlap_longitudinal_by_delivery3.csv",
+  row.names = FALSE
+)
+
+write.csv(
+  overlap_long,
+  "overlap_longitudinal_by_dyad_timepoint.csv",
+  row.names = FALSE
+)
+
+write.csv(
+  df_counts,
+  "infant_counts_by_delivery3.csv",
+  row.names = FALSE
+)
+```
+
