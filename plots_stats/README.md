@@ -153,10 +153,18 @@ Most scripts rely on the following R packages:
 
 ## 📁 File examples
 
-- Fig1-2_Transmission_vOTUs.Rmd: contains UpSet plots of vOTUs in mother–infant gut and milk used to make Figures 1–2
-- Fig2_abundance_threshold.Rmd: to plot thresholds for the most dominant vOTUs
-- Fig3_Phage-bacteria-alpha_beta_diversity.Rmd
-- Fig4_host_predictions.Rmd
-- Fig5_longitudinal_models.Rmd
-- singletons.Rmd: to calculate number of singletons
+## 📁 File examples
+
+- Fig1-2_Transmission_vOTUs.Rmd: shared and unique vOTUs across infant stool, maternal stool, and human milk; mother–infant sharing analyses and UpSet visualizations (Figures 1–2)
+- Fig1_TableS1_Delivery_vOTUs.Rmd: delivery-related comparisons and supplementary analyses of shared vOTUs (Table S1)
+- Fig2_abundance_threshold.Rmd: identification of dominant phageome thresholds and persistent high-abundance vOTUs (Figure 2)
+- Fig3_Phage-bacteria-alpha_beta_diversity.Rmd: alpha diversity, beta diversity, PCoA, PERMANOVA, and phage–bacteria community comparisons (Figure 3)
+- Fig4_sankey_plot.Rmd: host-linked phageome visualization and host-transition Sankey plots (Figure 4)
+- Fig4_taxonomy_ratios.Rmd: host prediction summaries and ecological structuring analyses used in Figure 4
+- Fig5_Longitudinal_phageome_models.Rmd: longitudinal mixed-effects models of phageome dynamics and environmental drivers (Figure 5)
+- Fig5_breastfeeding_milk.Rmd: feeding-related and human milk exposure analyses used in Figure 5
+- Supplementary_taxonomy_ratios.Rmd: supplementary host prediction and taxonomy analyses
+- FINAL_taxonomy_supplementaries.Rmd: generation of supplementary taxonomy tables and figures
+- Lysis-lysogeny.Rmd: temperate versus virulent lifestyle analyses using BACPHLIP predictions
+- singletons.Rmd: calculation of singleton vOTUs and prevalence summaries
 
