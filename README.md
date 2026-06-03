@@ -6,7 +6,7 @@ This repository contains the analysis workflow used to reconstruct and analyze t
 
 The code accompanies the manuscript:
 
-“Breastfeeding and maternal sources shape infant gut phage communities during the first year of life.”
+"Early-life dynamics of the infant gut phageome are associated with breastfeeding and maternal contributions"
 
 Figure generation and statistical analyses are located in the plots_stats/ directory.
 
