@@ -19,8 +19,9 @@ Shared and unique vOTUs across ecosystems:
 
 - Overlap statistics: Jaccard / Sørensen similarity
 - Dyad-level sharing
-- Stratification by delivery mode 
+- Stratification by delivery mode
 - Mother-Infant UpSet plots
+
 (Figure 1)
 
 ## 2️⃣ Dominance, Persistence & Core Definitions
@@ -41,6 +42,7 @@ Additional analyses:
 - Cumulative abundance curves
 - UpSet plots of dominant/core sets
 - Prevalence panels
+
 (Figure 2)
 
 ## 3️⃣ Diversity & Community Structure
@@ -51,12 +53,13 @@ Additional analyses:
 
 - vOTU richness (per sample)
 - Shannon diversity (via vegan)
+- Longitudinal mixed-effects models
 
 **Beta Diversity**
 
 - Bray–Curtis dissimilarity
 - Principal Coordinates Analysis (PCoA)
-- PERMANOVA (adonis2)
+- PERMANOVA (adonis2) with subject-level stratification
 - Dispersion checks (betadisper) to control for heterogeneity effects
 
 **Phage–Bacteria Coordination**
@@ -69,6 +72,7 @@ Additional analyses:
 - Alpha diversity panels
 - PCoA ordination plots
 - Correlation summaries
+
 (Figure 3)
 
 ## 4️⃣ Host-Linked Ecological Structuring
@@ -77,14 +81,14 @@ Additional analyses:
 
 - Host predictions from iPHoP (genus/family level)
 - Host-associated abundance and richness trajectories across infant development
-- Phage-to-bacteria ratios per predicted host genus (stool samples)
 - Lifestyle composition across hosts: Virulent vs temperate probabilities (BACPHLIP)
 
 **Visualization**
 
 - Stacked host composition bars
-- Host-specific abundance ratios
+- Host-specific trajectories
 - Sankey plots
+
 (Figure 4)
 
 ## 5️⃣ Drivers of Infant Phageome Assembly
@@ -92,31 +96,42 @@ Additional analyses:
 
 **Objective:** Assess environmental and perinatal influences on phageome structuring.
 
+**Longitudinal Mixed-Effects Models**
+
+Assessment of:
+- Human milk exposure
+- Dietary stage
+- Exclusive breastfeeding
+- Delivery mode
+- Birth environment
+- Intrapartum antibiotic exposure
+
+Models included subject identity as a random effect to account for repeated measures.
+
 **Community-Level Effects**
 
-PERMANOVA by time point for:
-- Feeding mode (breastfed / partial / none)
-- Human milk exposure at sampling
+PERMANOVA analyses including:
+- Human milk exposure
 - Dietary stage
+- Delivery mode
+- Birth environment
 
-Delivery-related variables:
-- Mode of birth
-- Place of birth
-
-Inclusion of covariates where applicable
+with subject-level stratification where applicable.
 
 **Feature-Level Effects**
 
-Genus-level CLR transformations with Linear Mixed Models (LMM)
-MaAsLin2 multivariable models
+- vOTU presence/absence mixed-effects models
+- Total viral abundance mixed-effects models
+- Genus-level CLR transformations
+- MaAsLin2 multivariable models
 
 **Visualization**
 
 - Stratified composition panels
 - Forest plots of effect sizes
 - Prevalence and abundance trajectories
-(Figure 5)
 
+(Figure 5)
 
 ## 📦 R packages used
 
@@ -130,13 +145,18 @@ Most scripts rely on the following R packages:
 - `data.table`
 - `ggrepel`
 - `patchwork`
+- `lme4`
+- `lmerTest`
+- `emmeans`
+- `MaAsLin2`
 - `RColorBrewer`
 
 ## 📁 File examples
 
-- Fig1-2_Transmission_vOTUs.Rmd: contains Upset plots of vOTUs in mother-infant gut and milk used to make Figures 1-2 
-- Fig2_abundance_threshold.Rmd: to plot a threshold for the most dominant vOTUs. 
-- Fig2_taxonomy_ratios.Rmd: phage-bacteria taxonomies and ratios. 
+- Fig1-2_Transmission_vOTUs.Rmd: contains UpSet plots of vOTUs in mother–infant gut and milk used to make Figures 1–2
+- Fig2_abundance_threshold.Rmd: to plot thresholds for the most dominant vOTUs
 - Fig3_Phage-bacteria-alpha_beta_diversity.Rmd
+- Fig4_host_predictions.Rmd
+- Fig5_longitudinal_models.Rmd
 - singletons.Rmd: to calculate number of singletons
 
