@@ -1,0 +1,254 @@
+---
+title: "Top 30 vOTUs prevalence and CPM"
+output: html_document
+date: "2025-11-22"
+---
+
+```{r}
+# FIGURE 2E
+
+library(here)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(scales)
+library(patchwork)
+
+# Load data
+df <- read_csv(
+  here("data", "results_with_metadata.csv"),
+  show_col_types = FALSE
+)
+
+# Create timepoint labels
+df <- df %>%
+  mutate(
+    timepoint_label = case_when(
+      mother_infant == "infant" & timepoint_months == 0.25 ~ "1 Week Infant",
+      mother_infant == "infant" & timepoint_months == 1    ~ "1 Month Infant",
+      mother_infant == "infant" & timepoint_months == 6    ~ "6 Months Infant",
+      mother_infant == "infant" & timepoint_months == 12   ~ "12 Months Infant",
+      mother_infant == "mother" & bodysite == "stool"      ~ "Mothers",
+      bodysite == "breastmilk"                             ~ "Breastmilk",
+      TRUE ~ NA_character_
+    ),
+    timepoint_label = factor(
+      timepoint_label,
+      levels = c(
+        "1 Week Infant",
+        "1 Month Infant",
+        "6 Months Infant",
+        "12 Months Infant",
+        "Mothers",
+        "Breastmilk"
+      )
+    ),
+    CPM = as.numeric(CPM)
+  ) %>%
+  filter(!is.na(timepoint_label))
+
+# Clean host genus
+df <- df %>%
+  mutate(
+    Host.genus_clean = case_when(
+      str_detect(as.character(Host.genus), "g__") ~
+        str_remove(
+          str_extract(as.character(Host.genus), "g__[^;]+"),
+          "^g__"
+        ),
+      !is.na(Host.genus) & Host.genus != "" ~ as.character(Host.genus),
+      TRUE ~ "Unclassified"
+    ),
+    Host.label = Host.genus_clean
+  )
+
+# Timepoint colors
+timepoint_colors <- c(
+  "1 Week Infant"    = "blue",
+  "1 Month Infant"   = "darkgreen",
+  "6 Months Infant"  = "mediumaquamarine",
+  "12 Months Infant" = "gold",
+  "Mothers"           = "purple4",
+  "Breastmilk"        = "pink"
+)
+
+# Select the 30 most abundant vOTUs globally by total CPM
+top30_tbl <- df %>%
+  filter(CPM > 0) %>%
+  group_by(vOTUs) %>%
+  summarise(
+    total_CPM = sum(CPM, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  left_join(
+    df %>%
+      select(vOTUs, Host.label) %>%
+      distinct(vOTUs, .keep_all = TRUE),
+    by = "vOTUs"
+  ) %>%
+  mutate(
+    label = paste0(vOTUs, " (", Host.label, ")")
+  ) %>%
+  arrange(desc(total_CPM)) %>%
+  slice_head(n = 30)
+
+# IDs of the 30 most abundant vOTUs
+top30_ids <- top30_tbl$vOTUs
+
+# Order vOTUs by total CPM
+# Lowest factor level first so the highest CPM appears at the top
+orden_por_CPM <- top30_tbl %>%
+  arrange(total_CPM) %>%
+  pull(label)
+
+# Calculate prevalence for the same 30 vOTUs by timepoint
+votu_individuos_tp <- df %>%
+  filter(
+    vOTUs %in% top30_ids,
+    CPM > 0
+  ) %>%
+  group_by(vOTUs, timepoint_label) %>%
+  summarise(
+    n_individuos = n_distinct(subject),
+    .groups = "drop"
+  ) %>%
+  left_join(
+    top30_tbl %>%
+      select(vOTUs, label, total_CPM),
+    by = "vOTUs"
+  ) %>%
+  mutate(
+    label = factor(label, levels = orden_por_CPM)
+  )
+
+# Calculate total CPM for the same 30 vOTUs by timepoint
+votu_CPM_tp <- df %>%
+  filter(
+    vOTUs %in% top30_ids,
+    CPM > 0
+  ) %>%
+  group_by(vOTUs, timepoint_label) %>%
+  summarise(
+    total_CPM_tp = sum(CPM, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  left_join(
+    top30_tbl %>%
+      select(vOTUs, label, total_CPM),
+    by = "vOTUs"
+  ) %>%
+  mutate(
+    label = factor(label, levels = orden_por_CPM)
+  )
+
+# Prevalence panel
+P_prev <- ggplot(
+  votu_individuos_tp,
+  aes(
+    x = n_individuos,
+    y = label,
+    fill = timepoint_label
+  )
+) +
+  geom_col(width = 0.8) +
+  scale_fill_manual(
+    values = timepoint_colors,
+    drop = FALSE
+  ) +
+  labs(
+    x = "Number of individuals",
+    y = "vOTU (Host genus)",
+    fill = "Timepoint"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    axis.text.y = element_text(size = 8),
+    legend.position = "none"
+  )
+
+# CPM panel
+P_cpm <- ggplot(
+  votu_CPM_tp,
+  aes(
+    x = total_CPM_tp,
+    y = label,
+    fill = timepoint_label
+  )
+) +
+  geom_col(width = 0.8) +
+  scale_fill_manual(
+    values = timepoint_colors,
+    drop = FALSE
+  ) +
+  scale_x_continuous(
+    labels = comma
+  ) +
+  labs(
+    x = "Total CPM",
+    y = NULL,
+    fill = "Timepoint"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.position = "right"
+  )
+
+# Combine both panels side by side
+FIG_COMBINED <- P_prev + P_cpm +
+  plot_layout(
+    widths = c(1, 1),
+    guides = "collect"
+  ) &
+  theme(
+    legend.position = "right"
+  )
+
+# Show figure
+print(FIG_COMBINED)
+
+# Create output directory
+out_dir <- here("results", "figures", "vOTUs")
+
+dir.create(
+  out_dir,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+# Save figure
+ggsave(
+  filename = file.path(
+    out_dir,
+    "Top30_vOTUs_CPM_prevalence.png"
+  ),
+  plot = FIG_COMBINED,
+  width = 14,
+  height = 8,
+  dpi = 300
+)
+
+ggsave(
+  filename = file.path(
+    out_dir,
+    "Top30_vOTUs_CPM_prevalence.pdf"
+  ),
+  plot = FIG_COMBINED,
+  width = 14,
+  height = 8
+)
+
+# Save table with the selected vOTUs
+write_csv(
+  top30_tbl,
+  file.path(
+    out_dir,
+    "Top30_vOTUs_by_total_CPM.csv"
+  )
+)
+```
