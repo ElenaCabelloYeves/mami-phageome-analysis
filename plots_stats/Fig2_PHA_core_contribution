@@ -1,0 +1,385 @@
+---
+title: "PHA core contribution by groups"
+output: html_document
+date: "2026-05-22"
+---
+
+```{r}
+# FIGURE 2C
+library(here)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lme4)
+library(lmerTest)
+library(emmeans)
+library(multcompView)
+
+# Load data
+df <- read_csv(
+  here("data", "results_with_metadata.csv"),
+  show_col_types = FALSE
+)
+
+# Assign general group
+df <- df %>%
+  mutate(
+    Group_general = case_when(
+      mother_infant == "infant" ~ "Infant",
+      grepl("BM", Sample) ~ "Breastmilk",
+      mother_infant == "mother" ~ "Mother_stool",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(Group_general))
+
+# Define dominant infant phageome (85% cumulative abundance)
+core_votus <- df %>%
+  filter(Group_general == "Infant") %>%
+  group_by(vOTUs) %>%
+  summarise(
+    total_cpm = sum(CPM, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(total_cpm)) %>%
+  mutate(
+    cum_cpm = cumsum(total_cpm),
+    cum_perc = cum_cpm / sum(total_cpm) * 100
+  ) %>%
+  filter(cum_perc <= 85) %>%
+  pull(vOTUs)
+
+cat("Number of dominant infant vOTUs:", length(core_votus), "\n")
+
+# Create detailed sample groups
+df <- df %>%
+  mutate(
+    Group_detailed = case_when(
+      mother_infant == "infant" & timepoint_months == 0.25 ~ "Infant_1W",
+      mother_infant == "infant" & timepoint_months == 1    ~ "Infant_1M",
+      mother_infant == "infant" & timepoint_months == 6    ~ "Infant_6M",
+      mother_infant == "infant" & timepoint_months == 12   ~ "Infant_12M",
+      grepl("BM", Sample)                                  ~ "Breastmilk",
+      mother_infant == "mother"                            ~ "Mother_stool",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(Group_detailed))
+
+# Keep dominant vOTUs with CPM > 0
+df_core <- df %>%
+  filter(
+    vOTUs %in% core_votus,
+    CPM > 0
+  )
+
+# Total CPM per sample
+total_cpm_per_sample <- df %>%
+  group_by(Sample) %>%
+  summarise(
+    total_cpm = sum(CPM, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Core CPM per sample
+core_cpm_per_sample <- df_core %>%
+  group_by(Sample) %>%
+  summarise(
+    core_cpm = sum(CPM, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Add sample metadata back
+group_info <- df_core %>%
+  dplyr::select(
+    Sample,
+    subject,
+    timepoint_months,
+    Group_detailed
+  ) %>%
+  distinct()
+
+# Percentage contribution of the dominant core
+core_percent_df <- core_cpm_per_sample %>%
+  left_join(
+    total_cpm_per_sample,
+    by = "Sample"
+  ) %>%
+  left_join(
+    group_info,
+    by = "Sample"
+  ) %>%
+  mutate(
+    core_pct = core_cpm / total_cpm * 100
+  )
+
+# Rename groups
+label_map <- c(
+  "Infant_1W"  = "1 Week Infant",
+  "Infant_1M"  = "1 Month Infant",
+  "Infant_6M"  = "6 Months Infant",
+  "Infant_12M" = "12 Months Infant",
+  "Mother_stool" = "Mothers",
+  "Breastmilk" = "Human milk"
+)
+
+core_percent_df <- core_percent_df %>%
+  mutate(
+    Group_label = factor(
+      label_map[Group_detailed],
+      levels = c(
+        "1 Week Infant",
+        "1 Month Infant",
+        "6 Months Infant",
+        "12 Months Infant",
+        "Mothers",
+        "Human milk"
+      )
+    )
+  )
+
+# Summary for plotting
+core_summary <- core_percent_df %>%
+  group_by(Group_label) %>%
+  summarise(
+    mean_pct = mean(core_pct, na.rm = TRUE),
+    sd = sd(core_pct, na.rm = TRUE),
+    n = n(),
+    se = sd / sqrt(n),
+    .groups = "drop"
+  )
+
+print(core_summary)
+
+# LONGITUDINAL MIXED MODEL — INFANT SAMPLES ONLY
+
+infant_core <- core_percent_df %>%
+  filter(
+    Group_detailed %in% c(
+      "Infant_1W",
+      "Infant_1M",
+      "Infant_6M",
+      "Infant_12M"
+    )
+  ) %>%
+  mutate(
+    subject = factor(subject),
+    timepoint_factor = factor(
+      timepoint_months,
+      levels = c(0.25, 1, 6, 12),
+      labels = c(
+        "1 Week Infant",
+        "1 Month Infant",
+        "6 Months Infant",
+        "12 Months Infant"
+      )
+    )
+  )
+
+# Linear mixed-effects model
+model_core <- lmer(
+  core_pct ~ timepoint_factor + (1 | subject),
+  data = infant_core
+)
+
+cat("\n===== LINEAR MIXED MODEL =====\n")
+print(anova(model_core))
+
+# Estimated marginal means
+emm_core <- emmeans(
+  model_core,
+  ~ timepoint_factor
+)
+
+cat("\n===== ESTIMATED MARGINAL MEANS =====\n")
+print(emm_core)
+
+# Sidak-adjusted pairwise comparisons
+pairwise_core <- pairs(
+  emm_core,
+  adjust = "sidak"
+)
+
+pairwise_core_df <- as.data.frame(
+  summary(pairwise_core)
+)
+
+cat("\n===== SIDAK PAIRWISE COMPARISONS =====\n")
+print(pairwise_core_df)
+
+
+# LETTERS FROM SIDAK PAIRWISE COMPARISONS
+
+# multcompLetters expects a named vector of p-values
+pvals <- pairwise_core_df$p.value
+
+names(pvals) <- gsub(
+  " - ",
+  "-",
+  pairwise_core_df$contrast,
+  fixed = TRUE
+)
+
+letters_core <- multcompView::multcompLetters(
+  pvals,
+  threshold = 0.05
+)$Letters
+
+letters_df <- data.frame(
+  Group_label = names(letters_core),
+  label = unname(letters_core),
+  stringsAsFactors = FALSE
+)
+
+letters_df$Group_label <- factor(
+  letters_df$Group_label,
+  levels = levels(core_percent_df$Group_label)
+)
+
+print(letters_df)
+
+# WELCH TEST — MOTHERS VS HUMAN MILK
+
+mother_milk_df <- core_percent_df %>%
+  filter(
+    Group_label %in% c(
+      "Mothers",
+      "Human milk"
+    )
+  )
+
+welch_test <- t.test(
+  core_pct ~ Group_label,
+  data = mother_milk_df,
+  var.equal = FALSE
+)
+
+cat("\n===== WELCH TEST: MOTHERS VS HUMAN MILK =====\n")
+print(welch_test)
+
+# ADD LETTERS ONLY TO INFANT GROUPS
+
+core_summary <- core_summary %>%
+  left_join(
+    letters_df,
+    by = "Group_label"
+  ) %>%
+  mutate(
+    # Mothers and human milk are not part of the longitudinal LMM
+    label = ifelse(
+      Group_label %in% c("Mothers", "Human milk"),
+      "",
+      label
+    ),
+    ypos_n = mean_pct + se + 3,
+    ypos_label = mean_pct + se + 10
+  )
+
+# Colors
+label_colors <- c(
+  "1 Week Infant" = "blue",
+  "1 Month Infant" = "darkgreen",
+  "6 Months Infant" = "mediumaquamarine",
+  "12 Months Infant" = "gold",
+  "Mothers" = "purple4",
+  "Human milk" = "pink"
+)
+
+# FINAL FIGURE ----------------------------------------------------------------------
+
+core <- ggplot(
+  core_summary,
+  aes(
+    x = Group_label,
+    y = mean_pct,
+    fill = Group_label
+  )
+) +
+  geom_bar(
+    stat = "identity",
+    color = "black",
+    width = 0.8
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = mean_pct - se,
+      ymax = mean_pct + se
+    ),
+    width = 0.2
+  ) +
+  geom_text(
+    aes(
+      y = ypos_n,
+      label = paste0("n=", n)
+    ),
+    size = 3.5
+  ) +
+  geom_text(
+    data = core_summary %>% filter(label != ""),
+    aes(
+      y = ypos_label,
+      label = label
+    ),
+    fontface = "bold",
+    size = 4.5
+  ) +
+  scale_fill_manual(
+    values = label_colors
+  ) +
+  ylab("Dominant infant phageome (%)") +
+  xlab("Sample group") +
+  coord_cartesian(
+    ylim = c(
+      0,
+      max(core_summary$ypos_label, na.rm = TRUE) + 5
+    )
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    ),
+    legend.position = "none",
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+print(core)
+
+
+# SAVE ------------------------------------------------------------------------------
+
+out_dir <- here(
+  "results",
+  "Figure2"
+)
+
+dir.create(
+  out_dir,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+ggsave(
+  file.path(
+    out_dir,
+    "Figure2C_PHA_core_abundance.png"
+  ),
+  plot = core,
+  width = 8,
+  height = 7,
+  dpi = 300
+)
+
+ggsave(
+  file.path(
+    out_dir,
+    "Figure2C_PHA_core_abundance.pdf"
+  ),
+  plot = core,
+  width = 8,
+  height = 7
+)
+```
