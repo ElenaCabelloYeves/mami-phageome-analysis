@@ -161,7 +161,7 @@ Most scripts rely on the following R packages:
 - Fig4_taxonomy_ratios.Rmd: host prediction summaries and ecological structuring analyses used in Figure 4
 - Fig5_Longitudinal_phageome_models.Rmd: longitudinal mixed-effects models of phageome dynamics and environmental drivers (Figure 5)
 - Fig5_breastfeeding_milk.Rmd: feeding-related and human milk exposure analyses used in Figure 5
-- Supplementary_taxonomy_ratios.Rmd: supplementary host prediction and taxonomy analyses
+- All_taxonomy_supplementaries.Rmd: supplementary host prediction and taxonomy analyses
 - FINAL_taxonomy_supplementaries.Rmd: generation of supplementary taxonomy tables and figures
 - Lysis-lysogeny.Rmd: temperate versus virulent lifestyle analyses using BACPHLIP predictions
 - singletons.Rmd: calculation of singleton vOTUs and prevalence summaries
