@@ -19,6 +19,8 @@ It includes:
 
 This table contains only detected vOTUs (`CPM > 0`) and is mainly used for abundance-based analyses, descriptive summaries, overlaps, and figure generation. It contains 21,567 detected sample–vOTU observations across 171 samples and includes all 6,248 vOTUs identified in the study.
 
+The difference between the 171 samples represented in this table and the 182 samples included in the complete zero-filled dataset (`results_with_metadata2.csv`) is due to 11 human milk samples in which no vOTUs were detected (`CPM = 0` for all vOTUs). Because `results_with_metadata.csv` contains detected vOTUs only, these samples are not represented in this table but are retained in `results_with_metadata2.csv`.
+
 ### `results_with_metadata2.csv`
 
 Complete viral presence/absence and abundance table used for longitudinal mixed-effects models.
