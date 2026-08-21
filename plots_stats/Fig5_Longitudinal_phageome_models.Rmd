@@ -5,15 +5,12 @@ date: "2026-04-22"
 ---
 ```{r}
 # Load required libraries ------------------------------------
-library(here)
 library(readr)
 library(dplyr)
 library(tidyr)
-library(ggplot2)
 library(lme4)
 library(lmerTest)
 library(broom.mixed)
-library(writexl)
 
 # Load input data --------------------------------------------
 # We use results_with_metadata2.csv
@@ -22,10 +19,8 @@ df <- read_csv(
   show_col_types = FALSE
 )
 
-# Check total number of vOTUs --------------------------------
-length(unique(df$vOTUs))
+# BUILD INFANT vOTU-LEVEL DATASET ----------------------------------------
 
-# We build a vOTU-level infant dataset -----------------------
 df_votu <- df %>%
   filter(
     mother_infant == "infant",
@@ -48,35 +43,151 @@ df_votu <- df %>%
     intrapartum_ATB = factor(intrapartum_ATB)
   )
 
-# We check number of infant stool vOTUs -------------------------
-length(unique(df_votu$vOTUs))
+cat("\n============================================================\n")
+cat("DATASET SUMMARY\n")
+cat("============================================================\n")
+cat("Infant stool vOTUs:", n_distinct(df_votu$vOTUs), "\n")
+cat("Subjects:", n_distinct(df_votu$subject), "\n")
+cat("Rows:", nrow(df_votu), "\n")
 
-# Count vOTU prevalence across samples -----------------------
-votu_freq <- df_votu %>%
-  group_by(vOTUs) %>%
-  summarise(
-    n_samples = sum(presence),
-    .groups = "drop"
+cat("\nOriginal delivery categories:\n")
+print(table(df_votu$delivery, useNA = "ifany"))
+
+
+# CREATE FINAL DELIVERY VARIABLES ------------------------------------------
+
+df_votu <- df_votu %>%
+  mutate(
+
+    # Birth environment:
+    # hospital = C-section + hospital vaginal
+    # home = home birth
+    birth_environment = case_when(
+      delivery == "homebirth" ~ "home",
+      delivery %in% c("vaginal", "csection") ~ "hospital",
+      TRUE ~ NA_character_
+    ),
+
+    birth_environment = factor(
+      birth_environment,
+      levels = c("hospital", "home")
+    ),
+
+    # Delivery mode:
+    # vaginal = hospital vaginal + home vaginal
+    # csection = C-section
+    delivery_binary = case_when(
+      delivery %in% c("vaginal", "homebirth") ~ "vaginal",
+      delivery == "csection" ~ "csection",
+      TRUE ~ NA_character_
+    ),
+
+    delivery_binary = factor(
+      delivery_binary,
+      levels = c("csection", "vaginal")
+    )
   )
 
-# Keep non-rare vOTUs ----------------------------------------
-votus_keep <- votu_freq %>%
-  filter(n_samples >= 2) %>%
-  pull(vOTUs)
 
-# Filter dataset excluding rare vOTUs ------------------------
-df_votu_nosing <- df_votu %>%
-  filter(vOTUs %in% votus_keep)
+cat("\nBirth environment coding:\n")
+print(
+  table(
+    df_votu$delivery,
+    df_votu$birth_environment,
+    useNA = "ifany"
+  )
+)
 
-# Check number of retained vOTUs -----------------------------
-length(unique(df_votu_nosing$vOTUs))
+cat("\nDelivery mode coding:\n")
+print(
+  table(
+    df_votu$delivery,
+    df_votu$delivery_binary,
+    useNA = "ifany"
+  )
+)
 
-# Fit diet model excluding rare vOTUs ------------------------
-model_bin_diet_nosing <- glmer(
+# OVERALL AGE MODEL ---------------------------------------------------------
+
+model_age_main <- glmer(
+  presence ~ timepoint_scaled +
+    (1 + timepoint_scaled | subject) +
+    (1 | vOTUs),
+  data = df_votu,
+  family = binomial,
+  control = glmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+
+
+# HUMAN MILK EXPOSURE MODEL -------------------------------------------------
+
+model_contact_bf_main <- glmer(
+  presence ~ timepoint_scaled * Contact_BF +
+    (1 + timepoint_scaled | subject) +
+    (1 | vOTUs),
+  data = df_votu,
+  family = binomial,
+  control = glmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+
+# BIRTH ENVIRONMENT MODEL - HOME vs HOSPITAL --------------------------------
+
+model_birth_environment <- glmer(
+  presence ~ timepoint_scaled * birth_environment +
+    (1 + timepoint_scaled | subject) +
+    (1 | vOTUs),
+  data = df_votu,
+  family = binomial,
+  control = glmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+
+
+# DELIVERY MODE MODEL - VAGINAL vs C-SECTION -------------------------------
+
+model_delivery_binary <- glmer(
+  presence ~ timepoint_scaled * delivery_binary +
+    (1 + timepoint_scaled | subject) +
+    (1 | vOTUs),
+  data = df_votu,
+  family = binomial,
+  control = glmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+
+
+# INTRAPARTUM ANTIBIOTIC MODEL ---------------------------------------------
+
+model_ATB_scaled <- glmer(
+  presence ~ timepoint_scaled * intrapartum_ATB +
+    (1 + timepoint_scaled | subject) +
+    (1 | vOTUs),
+  data = df_votu,
+  family = binomial,
+  control = glmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+
+
+# DIET MODEL - Original random-intercept specification ----------------------
+
+model_bin_diet <- glmer(
   presence ~ timepoint_scaled * Diet +
     (1 | subject) +
     (1 | vOTUs),
-  data = df_votu_nosing,
+  data = df_votu,
   family = binomial,
   control = glmerControl(
     optimizer = "bobyqa",
@@ -84,24 +195,10 @@ model_bin_diet_nosing <- glmer(
   )
 )
 
-summary(model_bin_diet_nosing)
 
-# Fit delivery model excluding rare vOTUs --------------------
-model_bin_delivery_nosing <- glmer(
-  presence ~ timepoint_scaled * delivery +
-    (1 | subject) +
-    (1 | vOTUs),
-  data = df_votu_nosing,
-  family = binomial,
-  control = glmerControl(
-    optimizer = "bobyqa",
-    optCtrl = list(maxfun = 2e5)
-  )
-)
+# FEEDING CATEGORY MODEL - Original random-intercept specification ----------
 
-summary(model_bin_delivery_nosing)
-
-# Fit feeding category model ---------------------------------
+# note: In the manuscript No breastfed = formula; Partially breastfed = mixed
 model_presence_feed <- glmer(
   presence ~ timepoint_scaled * feeding_cat +
     (1 | subject) +
@@ -114,39 +211,60 @@ model_presence_feed <- glmer(
   )
 )
 
-summary(model_presence_feed)
 
-# Build abundance dataset by sample --------------------------
-rich_df <- df_votu %>%
-  group_by(
-    Sample,
-    subject,
-    timepoint_months,
-    feeding_cat
-  ) %>%
+# LOW-PREVALENCE vOTU FILTER ------------------------------------------------
+
+votu_freq <- df_votu %>%
+  group_by(vOTUs) %>%
   summarise(
-    total_CPM = sum(CPM),
-    richness = sum(presence),
+    n_samples = sum(presence),
     .groups = "drop"
-  ) %>%
-  mutate(
-    log_total_CPM = log10(total_CPM + 1),
-    subject = factor(subject),
-    feeding_cat = factor(feeding_cat),
-    timepoint_scaled = as.numeric(scale(timepoint_months))
   )
 
-# Fit feeding category abundance model -----------------------
-model_abundance_feed <- lmer(
-  log_total_CPM ~ timepoint_scaled * feeding_cat +
-    (1 | subject),
-  data = rich_df
+votus_keep <- votu_freq %>%
+  filter(n_samples >= 2) %>%
+  pull(vOTUs)
+
+df_votu_nosing <- df_votu %>%
+  filter(vOTUs %in% votus_keep) %>%
+  droplevels()
+
+cat("\nRetained vOTUs after low-prevalence filtering:",
+    n_distinct(df_votu_nosing$vOTUs), "\n")
+
+
+# ROBUSTNESS: DIET ----------------------------------------------------------
+
+model_bin_diet_nosing <- glmer(
+  presence ~ timepoint_scaled * Diet +
+    (1 | subject) +
+    (1 | vOTUs),
+  data = df_votu_nosing,
+  family = binomial,
+  control = glmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
 )
 
-summary(model_abundance_feed)
-anova(model_abundance_feed)
 
-# Fit feeding category model excluding rare vOTUs -------------
+# ROBUSTNESS: ORIGINAL 3-CATEGORY DELIVERY ----------------------------------
+
+model_bin_delivery_nosing <- glmer(
+  presence ~ timepoint_scaled * delivery +
+    (1 | subject) +
+    (1 | vOTUs),
+  data = df_votu_nosing,
+  family = binomial,
+  control = glmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+
+
+# ROBUSTNESS: FEEDING CATEGORY ---------------------------------------------
+
 model_presence_feed_nosing <- glmer(
   presence ~ timepoint_scaled * feeding_cat +
     (1 | subject) +
@@ -159,112 +277,9 @@ model_presence_feed_nosing <- glmer(
   )
 )
 
-summary(model_presence_feed_nosing)
-```
 
-```{r}
-# We summarise sample sizes by feeding category ------------------
-n_feeding_cat <- df_votu %>%
-  select(
-    subject,
-    Sample,
-    mother_infant,
-    bodysite,
-    timepoint_months,
-    feeding_cat
-  ) %>%
-  distinct() %>%
-  filter(!is.na(feeding_cat)) %>%
-  group_by(feeding_cat) %>%
-  summarise(
-    n_samples = n(),
-    n_subjects = n_distinct(subject),
-    .groups = "drop"
-  ) %>%
-  arrange(desc(n_subjects))
+# SAMPLE-LEVEL CPM DATASET -------------------------------------------------
 
-print(n_feeding_cat)
-
-# Summarising sample sizes by feeding category and timepoint ----
-n_feeding_cat_timepoint <- df_votu %>%
-  select(
-    subject,
-    Sample,
-    timepoint_months,
-    feeding_cat
-  ) %>%
-  distinct() %>%
-  filter(!is.na(feeding_cat)) %>%
-  group_by(timepoint_months, feeding_cat) %>%
-  summarise(
-    n_samples = n(),
-    n_subjects = n_distinct(subject),
-    .groups = "drop"
-  ) %>%
-  arrange(timepoint_months, desc(n_subjects))
-
-print(n_feeding_cat_timepoint)
-
-# Summarise sample sizes by human milk exposure -------------
-n_contact_bf <- df_votu %>%
-  select(
-    subject,
-    Sample,
-    Contact_BF
-  ) %>%
-  distinct() %>%
-  filter(!is.na(Contact_BF)) %>%
-  group_by(Contact_BF) %>%
-  summarise(
-    n_samples = n(),
-    n_subjects = n_distinct(subject),
-    .groups = "drop"
-  ) %>%
-  arrange(desc(n_subjects))
-
-print(n_contact_bf)
-
-# Summarise sample sizes by human milk exposure (Contact_BF) and timepoint
-n_contact_bf_timepoint <- df_votu %>%
-  select(
-    subject,
-    Sample,
-    timepoint_months,
-    Contact_BF
-  ) %>%
-  distinct() %>%
-  filter(!is.na(Contact_BF)) %>%
-  group_by(timepoint_months, Contact_BF) %>%
-  summarise(
-    n_samples = n(),
-    n_subjects = n_distinct(subject),
-    .groups = "drop"
-  ) %>%
-  arrange(timepoint_months, desc(n_subjects))
-
-print(n_contact_bf_timepoint)
-
-# Summarise sample sizes by diet ------------------------------
-n_diet <- df_votu %>%
-  select(
-    subject,
-    Sample,
-    Diet
-  ) %>%
-  distinct() %>%
-  filter(!is.na(Diet)) %>%
-  group_by(Diet) %>%
-  summarise(
-    n_samples = n(),
-    n_subjects = n_distinct(subject),
-    .groups = "drop"
-  ) %>%
-  arrange(desc(n_subjects))
-
-print(n_diet)
-
-## MIXED MODELS FOR CPM ABUNDANCES 
-# Build CPM abundance dataset --------------------------------
 cpm_df <- df_votu %>%
   group_by(
     Sample,
@@ -283,62 +298,105 @@ cpm_df <- df_votu %>%
   ) %>%
   mutate(
     log_total_CPM = log10(total_CPM + 1),
+
     subject = factor(subject),
     feeding_cat = factor(feeding_cat),
     Contact_BF = factor(Contact_BF),
     Diet = factor(Diet),
     delivery = factor(delivery),
     intrapartum_ATB = factor(intrapartum_ATB),
+
     timepoint_scaled = as.numeric(scale(timepoint_months))
   )
 
-# Fit CPM model by feeding category --------------------------
+
+# CPM MODELS --------------------------------------------------------------
+
 model_cpm_feeding_cat <- lmer(
   log_total_CPM ~ timepoint_scaled * feeding_cat +
     (1 | subject),
   data = cpm_df
 )
 
-summary(model_cpm_feeding_cat)
-anova(model_cpm_feeding_cat)
-
-# Fit CPM model by human milk exposure ---------------------
 model_cpm_contact_bf <- lmer(
   log_total_CPM ~ timepoint_scaled * Contact_BF +
     (1 | subject),
   data = cpm_df
 )
 
-summary(model_cpm_contact_bf)
-anova(model_cpm_contact_bf)
-
-# Fit CPM model by diet --------------------------------------
 model_cpm_diet <- lmer(
   log_total_CPM ~ timepoint_scaled * Diet +
     (1 | subject),
   data = cpm_df
 )
 
-summary(model_cpm_diet)
-anova(model_cpm_diet)
-
-# Fit CPM model by delivery ----------------------------------
 model_cpm_delivery <- lmer(
   log_total_CPM ~ timepoint_scaled * delivery +
     (1 | subject),
   data = cpm_df
 )
 
-summary(model_cpm_delivery)
-anova(model_cpm_delivery)
-
-# Fit CPM model by intrapartum antibiotics -------------------
 model_cpm_atb <- lmer(
   log_total_CPM ~ timepoint_scaled * intrapartum_ATB +
     (1 | subject),
   data = cpm_df
 )
 
-summary(model_cpm_atb)
-anova(model_cpm_atb)
+
+# ALL FINAL MODELS IN ONE LIST ---------------------------------------------
+
+all_models <- list(
+
+  Overall_age = model_age_main,
+
+  Human_milk_exposure = model_contact_bf_main,
+
+  Birth_environment_home_vs_hospital = model_birth_environment,
+
+  Delivery_mode_vaginal_vs_csection = model_delivery_binary,
+
+  Intrapartum_ATB = model_ATB_scaled,
+
+  Diet_presence = model_bin_diet,
+
+  Feeding_category_presence = model_presence_feed,
+
+  Diet_no_rare_vOTUs = model_bin_diet_nosing,
+
+  Delivery_3group_no_rare_vOTUs = model_bin_delivery_nosing,
+
+  Feeding_category_no_rare_vOTUs = model_presence_feed_nosing,
+
+  CPM_human_milk = model_cpm_contact_bf,
+
+  CPM_diet = model_cpm_diet,
+
+  CPM_feeding_category = model_cpm_feeding_cat,
+
+  CPM_delivery_3group = model_cpm_delivery,
+
+  CPM_ATB = model_cpm_atb
+)
+
+
+# PRINT FULL SUMMARY OF EVERY MODEL ----------------------------------------
+
+for (nm in names(all_models)) {
+
+  cat("\n\n")
+  cat("############################################################\n")
+  cat("MODEL:", nm, "\n")
+  cat("############################################################\n\n")
+
+  print(summary(all_models[[nm]]))
+
+  if (inherits(all_models[[nm]], "merMod")) {
+
+    cat("\nSingular fit:\n")
+    print(isSingular(all_models[[nm]]))
+
+    cat("\nConvergence messages:\n")
+    print(all_models[[nm]]@optinfo$conv$lme4$messages)
+  }
+}
 ```
