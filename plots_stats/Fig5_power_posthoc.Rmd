@@ -1,0 +1,1092 @@
+---
+title: "Fig5 power posthoc analysis"
+output: html_document
+date: "2026-08-21"
+---
+
+```{r}
+# ============================================================
+# SIMULATION-BASED POWER ANALYSIS
+# HUMAN MILK EXPOSURE (Contact_BF) - vOTU PRESENCE
+# RANDOM-SLOPE MODEL
+# 100 MONTE CARLO SIMULATIONS
+# ============================================================
+
+library(here)
+library(readr)
+library(dplyr)
+library(lme4)
+library(simr)
+
+cat("\n========================================\n")
+cat("POWER ANALYSIS - HUMAN MILK EXPOSURE\n")
+cat("Contact_BF: NO vs YES\n")
+cat("RANDOM-SLOPE MODEL\n")
+cat("100 SIMULATIONS\n")
+cat("========================================\n\n")
+
+# LOAD DATA -------------------------------------------------------------------
+
+df <- read_csv(
+  here("data", "results_with_metadata2.csv"),
+  show_col_types = FALSE
+)
+
+# BUILD FULL INFANT vOTU DATASET ----------------------------------------------
+
+df_votu <- df %>%
+  filter(
+    mother_infant == "infant",
+    bodysite == "stool"
+  ) %>%
+  mutate(
+    presence = if_else(CPM > 0, 1L, 0L),
+
+    subject = factor(subject),
+    vOTUs = factor(vOTUs),
+
+    timepoint_months = as.numeric(timepoint_months),
+
+    timepoint_scaled = as.numeric(
+      scale(
+        timepoint_months,
+        center = TRUE,
+        scale = TRUE
+      )
+    ),
+
+    Contact_BF = factor(
+      Contact_BF,
+      levels = c("no", "yes")
+    )
+  )
+
+# DATA CHECKS ------------------------------------------------------------------
+
+cat("Observations:", nrow(df_votu), "\n")
+cat("vOTUs:", nlevels(df_votu$vOTUs), "\n")
+cat("Subjects:", nlevels(df_votu$subject), "\n\n")
+
+cat("Contact_BF levels:\n")
+print(levels(df_votu$Contact_BF))
+
+cat("\nNumber of unique samples by Contact_BF:\n")
+
+print(
+  df_votu %>%
+    select(Sample, subject, Contact_BF) %>%
+    distinct() %>%
+    count(Contact_BF)
+)
+
+cat("\nContact_BF by timepoint:\n")
+
+print(
+  df_votu %>%
+    select(Sample, subject, timepoint_months, Contact_BF) %>%
+    distinct() %>%
+    count(timepoint_months, Contact_BF)
+)
+
+# FIT RANDOM-SLOPE HUMAN MILK MODEL ----------------------------------------------
+
+cat("\n========================================\n")
+cat("FITTING HUMAN MILK MODEL\n")
+cat("========================================\n\n")
+
+fit_time <- system.time({
+
+  model_contact_bf_randomslope <- glmer(
+    presence ~ timepoint_scaled * Contact_BF +
+      (1 + timepoint_scaled | subject) +
+      (1 | vOTUs),
+    data = df_votu,
+    family = binomial,
+    control = glmerControl(
+      optimizer = "bobyqa",
+      optCtrl = list(maxfun = 2e5)
+    )
+  )
+
+})
+
+cat("\nModel fitted.\n")
+print(fit_time)
+
+cat("\nFixed effects:\n")
+print(fixef(model_contact_bf_randomslope))
+
+cat("\nCoefficient names:\n")
+print(names(fixef(model_contact_bf_randomslope)))
+
+cat("\nRandom effects:\n")
+print(VarCorr(model_contact_bf_randomslope))
+
+cat("\nSingular fit:\n")
+print(isSingular(model_contact_bf_randomslope))
+
+cat("\nConvergence messages:\n")
+print(model_contact_bf_randomslope@optinfo$conv$lme4$messages)
+
+# SETTINGS ----------------------------------------------------------------------
+
+NSIM <- 100
+SEED <- 86420
+
+# POWER ANALYSIS ----------------------------------------------------------------
+#
+# AGE x HUMAN MILK EXPOSURE
+#
+# Reference = Contact_BF "no"
+#
+# Tested coefficient:
+# timepoint_scaled:Contact_BFyes
+
+cat("\n========================================\n")
+cat("STARTING 100 SIMULATIONS\n")
+cat("Effect: timepoint_scaled:Contact_BFyes\n")
+cat("========================================\n\n")
+
+start_time <- Sys.time()
+
+power_contact_bf_randomslope_100 <- powerSim(
+  model_contact_bf_randomslope,
+  test = fixed(
+    "timepoint_scaled:Contact_BFyes",
+    method = "z"
+  ),
+  nsim = NSIM,
+  alpha = 0.05,
+  seed = SEED
+)
+
+end_time <- Sys.time()
+
+
+# RESULTS ------------------------------------------------------------------------
+
+cat("\n========================================\n")
+cat("POWER ANALYSIS FINISHED\n")
+cat("========================================\n\n")
+
+print(power_contact_bf_randomslope_100)
+
+cat("\nStart time:\n")
+print(start_time)
+
+cat("\nEnd time:\n")
+print(end_time)
+
+cat("\nTotal elapsed time:\n")
+print(end_time - start_time)
+
+# SAVE MODEL AND RESULTS ----------------------------------------------------------
+
+dir.create(
+  here("results", "power_analysis"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+saveRDS(
+  model_contact_bf_randomslope,
+  here(
+    "results",
+    "power_analysis",
+    "model_contact_bf_randomslope.rds"
+  )
+)
+
+saveRDS(
+  power_contact_bf_randomslope_100,
+  here(
+    "results",
+    "power_analysis",
+    "power_contact_bf_randomslope_nsim100.rds"
+  )
+)
+
+capture.output(
+  summary(model_contact_bf_randomslope),
+  file = here(
+    "results",
+    "power_analysis",
+    "model_contact_bf_randomslope_summary.txt"
+  )
+)
+
+capture.output(
+  power_contact_bf_randomslope_100,
+  file = here(
+    "results",
+    "power_analysis",
+    "power_contact_bf_randomslope_nsim100.txt"
+  )
+)
+
+writeLines(
+  c(
+    paste("Date:", Sys.time()),
+    paste("NSIM:", NSIM),
+    paste("Seed:", SEED),
+
+    paste(
+      "Coefficient tested:",
+      "timepoint_scaled:Contact_BFyes"
+    ),
+
+    paste(
+      "Observed effect:",
+      fixef(model_contact_bf_randomslope)[
+        "timepoint_scaled:Contact_BFyes"
+      ]
+    ),
+
+    paste(
+      "Observations:",
+      nobs(model_contact_bf_randomslope)
+    ),
+
+    paste(
+      "vOTUs:",
+      nlevels(model.frame(model_contact_bf_randomslope)$vOTUs)
+    ),
+
+    paste(
+      "Subjects:",
+      nlevels(model.frame(model_contact_bf_randomslope)$subject)
+    ),
+
+    paste(
+      "Singular fit:",
+      isSingular(model_contact_bf_randomslope)
+    ),
+
+    paste(
+      "Model fitting elapsed seconds:",
+      fit_time[["elapsed"]]
+    ),
+
+    paste("Start:", start_time),
+    paste("End:", end_time),
+    paste("Elapsed:", end_time - start_time)
+  ),
+
+  here(
+    "results",
+    "power_analysis",
+    "power_contact_bf_randomslope_nsim100_metadata.txt"
+  )
+)
+
+cat("\nResults saved successfully.\n")
+
+```
+
+
+
+```{r}
+# ============================================================
+# SIMULATION-BASED POWER ANALYSIS
+# DELIVERY MODE - vOTU PRESENCE
+# MAIN MODEL WITH SUBJECT-SPECIFIC RANDOM SLOPE
+# 100 MONTE CARLO SIMULATIONS
+# ============================================================
+
+library(here)
+library(readr)
+library(dplyr)
+library(lme4)
+library(simr)
+
+cat("\n========================================\n")
+cat("POWER ANALYSIS - DELIVERY MODE\n")
+cat("MAIN RANDOM-SLOPE MODEL\n")
+cat("100 SIMULATIONS\n")
+cat("========================================\n\n")
+
+# LOAD DATA ------------------------------------------------------------
+
+df <- read_csv(
+  here("data", "results_with_metadata2.csv"),
+  show_col_types = FALSE
+)
+
+# BUILD FULL INFANT vOTU DATASET ---------------------------------------
+
+df_votu <- df %>%
+  filter(
+    mother_infant == "infant",
+    bodysite == "stool"
+  ) %>%
+  mutate(
+    presence = if_else(CPM > 0, 1L, 0L),
+
+    subject = factor(subject),
+    vOTUs = factor(vOTUs),
+
+    timepoint_months = as.numeric(timepoint_months),
+    timepoint_scaled = as.numeric(
+      scale(
+        timepoint_months,
+        center = TRUE,
+        scale = TRUE
+      )
+    ),
+
+    delivery = factor(delivery)
+  )
+
+cat("Observations:", nrow(df_votu), "\n")
+cat("vOTUs:", nlevels(df_votu$vOTUs), "\n")
+cat("Subjects:", nlevels(df_votu$subject), "\n\n")
+
+cat("Delivery levels:\n")
+print(levels(df_votu$delivery))
+
+
+# FIT EXACT MAIN DELIVERY MODEL ------------------------------------------
+
+cat("\n========================================\n")
+cat("FITTING MAIN DELIVERY MODEL\n")
+cat("========================================\n\n")
+
+fit_time <- system.time({
+
+  model_delivery_scaled <- glmer(
+    presence ~ timepoint_scaled * delivery +
+      (1 + timepoint_scaled | subject) +
+      (1 | vOTUs),
+    data = df_votu,
+    family = binomial,
+    control = glmerControl(
+      optimizer = "bobyqa",
+      optCtrl = list(maxfun = 2e5)
+    )
+  )
+
+})
+
+cat("\nModel fitted.\n")
+print(fit_time)
+
+cat("\nFixed effects:\n")
+print(fixef(model_delivery_scaled))
+
+cat("\nCoefficient names:\n")
+print(names(fixef(model_delivery_scaled)))
+
+cat("\nRandom effects:\n")
+print(VarCorr(model_delivery_scaled))
+
+cat("\nSingular fit:\n")
+print(isSingular(model_delivery_scaled))
+
+cat("\nConvergence messages:\n")
+print(model_delivery_scaled@optinfo$conv$lme4$messages)
+
+
+# SETTINGS --------------------------------------------------------------
+
+NSIM <- 100
+SEED <- 54321
+
+
+# POWER ANALYSIS --------------------------------------------------------
+#
+# DELIVERY MODE:
+# vaginal vs C-section trajectory
+#
+# csection is the reference level
+#
+# Tested coefficient:
+# timepoint_scaled:deliveryvaginal
+
+cat("\n========================================\n")
+cat("STARTING 100 SIMULATIONS\n")
+cat("Effect: timepoint_scaled:deliveryvaginal\n")
+cat("========================================\n\n")
+
+start_time <- Sys.time()
+
+power_delivery_randomslope_100 <- powerSim(
+  model_delivery_scaled,
+  test = fixed(
+    "timepoint_scaled:deliveryvaginal",
+    method = "z"
+  ),
+  nsim = NSIM,
+  alpha = 0.05,
+  seed = SEED
+)
+
+end_time <- Sys.time()
+
+# RESULTS ------------------------------------------------------------
+
+cat("\n========================================\n")
+cat("POWER ANALYSIS FINISHED\n")
+cat("========================================\n\n")
+
+print(power_delivery_randomslope_100)
+
+cat("\nStart time:\n")
+print(start_time)
+
+cat("\nEnd time:\n")
+print(end_time)
+
+cat("\nTotal elapsed time:\n")
+print(end_time - start_time)
+
+
+# SAVE MODEL AND RESULTS ----------------------------------------------
+
+dir.create(
+  here("results", "power_analysis"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+saveRDS(
+  model_delivery_scaled,
+  here(
+    "results",
+    "power_analysis",
+    "model_delivery_scaled_MAIN.rds"
+  )
+)
+
+saveRDS(
+  power_delivery_randomslope_100,
+  here(
+    "results",
+    "power_analysis",
+    "power_delivery_randomslope_nsim100.rds"
+  )
+)
+
+capture.output(
+  summary(model_delivery_scaled),
+  file = here(
+    "results",
+    "power_analysis",
+    "model_delivery_scaled_MAIN_summary.txt"
+  )
+)
+
+capture.output(
+  power_delivery_randomslope_100,
+  file = here(
+    "results",
+    "power_analysis",
+    "power_delivery_randomslope_nsim100.txt"
+  )
+)
+
+writeLines(
+  c(
+    paste("Date:", Sys.time()),
+    paste("NSIM:", NSIM),
+    paste("Seed:", SEED),
+
+    paste(
+      "Coefficient tested:",
+      "timepoint_scaled:deliveryvaginal"
+    ),
+
+    paste(
+      "Observed effect:",
+      fixef(model_delivery_scaled)[
+        "timepoint_scaled:deliveryvaginal"
+      ]
+    ),
+
+    paste(
+      "Observations:",
+      nobs(model_delivery_scaled)
+    ),
+
+    paste(
+      "vOTUs:",
+      nlevels(model.frame(model_delivery_scaled)$vOTUs)
+    ),
+
+    paste(
+      "Subjects:",
+      nlevels(model.frame(model_delivery_scaled)$subject)
+    ),
+
+    paste(
+      "Singular fit:",
+      isSingular(model_delivery_scaled)
+    ),
+
+    paste(
+      "Model fitting elapsed seconds:",
+      fit_time[["elapsed"]]
+    ),
+
+    paste(
+      "Start:",
+      start_time
+    ),
+
+    paste(
+      "End:",
+      end_time
+    ),
+
+    paste(
+      "Elapsed:",
+      end_time - start_time
+    )
+  ),
+
+  here(
+    "results",
+    "power_analysis",
+    "power_delivery_randomslope_nsim100_metadata.txt"
+  )
+)
+
+cat("\nResults saved successfully.\n")
+```
+
+
+```{r}
+# ============================================================
+# SIMULATION-BASED POWER ANALYSIS
+# PLACE OF DELIVERY: HOME vs HOSPITAL
+# MAIN RANDOM-SLOPE MODEL
+# 100 MONTE CARLO SIMULATIONS
+# ============================================================
+
+library(here)
+library(readr)
+library(dplyr)
+library(lme4)
+library(simr)
+
+cat("\n========================================\n")
+cat("POWER ANALYSIS - PLACE OF DELIVERY\n")
+cat("HOME vs HOSPITAL\n")
+cat("MAIN RANDOM-SLOPE MODEL\n")
+cat("100 SIMULATIONS\n")
+cat("========================================\n\n")
+
+# LOAD DATA ---------------------------------------------------------------------
+
+df <- read_csv(
+  here("data", "results_with_metadata2.csv"),
+  show_col_types = FALSE
+)
+
+# BUILD INFANT vOTU DATASET -----------------------------------------------------
+
+df_votu <- df %>%
+  filter(
+    mother_infant == "infant",
+    bodysite == "stool"
+  ) %>%
+  mutate(
+    presence = if_else(CPM > 0, 1L, 0L),
+
+    subject = factor(subject),
+    vOTUs = factor(vOTUs),
+
+    timepoint_months = as.numeric(timepoint_months),
+    timepoint_scaled = as.numeric(scale(timepoint_months)),
+
+    delivery = factor(delivery),
+
+    # Place of delivery
+    place_delivery = case_when(
+      delivery == "homebirth" ~ "home",
+      delivery %in% c("csection", "vaginal") ~ "hospital",
+      TRUE ~ NA_character_
+    ),
+
+    # Hospital is reference
+    place_delivery = factor(
+      place_delivery,
+      levels = c("hospital", "home")
+    )
+  )
+
+# CHECK CODING --------------------------------------------------------------------
+
+cat("Observations:", nrow(df_votu), "\n")
+cat("vOTUs:", nlevels(df_votu$vOTUs), "\n")
+cat("Subjects:", nlevels(df_votu$subject), "\n\n")
+
+cat("Place of delivery levels:\n")
+print(levels(df_votu$place_delivery))
+
+cat("\nNumber of subjects by place of delivery:\n")
+
+print(
+  df_votu %>%
+    select(subject, place_delivery) %>%
+    distinct() %>%
+    count(place_delivery)
+)
+
+cat("\nNumber of samples by place of delivery:\n")
+
+print(
+  df_votu %>%
+    select(Sample, subject, place_delivery) %>%
+    distinct() %>%
+    count(place_delivery)
+)
+
+# FIT MODEL ------------------------------------------------------------------------
+
+cat("\n========================================\n")
+cat("FITTING PLACE OF DELIVERY MODEL\n")
+cat("========================================\n\n")
+
+fit_time <- system.time({
+
+  model_place_delivery <- glmer(
+    presence ~ timepoint_scaled * place_delivery +
+      (1 + timepoint_scaled | subject) +
+      (1 | vOTUs),
+    data = df_votu,
+    family = binomial,
+    control = glmerControl(
+      optimizer = "bobyqa",
+      optCtrl = list(maxfun = 2e5)
+    )
+  )
+
+})
+
+cat("\nModel fitted.\n")
+print(fit_time)
+
+cat("\nFixed effects:\n")
+print(fixef(model_place_delivery))
+
+cat("\nCoefficient names:\n")
+print(names(fixef(model_place_delivery)))
+
+cat("\nRandom effects:\n")
+print(VarCorr(model_place_delivery))
+
+cat("\nSingular fit:\n")
+print(isSingular(model_place_delivery))
+
+cat("\nConvergence messages:\n")
+print(model_place_delivery@optinfo$conv$lme4$messages)
+
+# POWER SETTINGS ---------------------------------------------------------------------
+
+NSIM <- 100
+SEED <- 13579
+
+# POWER ANALYSIS ---------------------------------------------------------------------
+# TIME × PLACE OF DELIVERY
+# Hospital = reference
+# ------------------------------------------------------------
+
+cat("\n========================================\n")
+cat("STARTING 100 SIMULATIONS\n")
+cat("Effect: timepoint_scaled:place_deliveryhome\n")
+cat("========================================\n\n")
+
+start_time <- Sys.time()
+
+power_place_delivery_100 <- powerSim(
+  model_place_delivery,
+  test = fixed(
+    "timepoint_scaled:place_deliveryhome",
+    method = "z"
+  ),
+  nsim = NSIM,
+  alpha = 0.05,
+  seed = SEED
+)
+
+end_time <- Sys.time()
+
+# RESULTS ---------------------------------------------------------------------
+
+cat("\n========================================\n")
+cat("POWER ANALYSIS FINISHED\n")
+cat("========================================\n\n")
+
+print(power_place_delivery_100)
+
+cat("\nStart time:\n")
+print(start_time)
+
+cat("\nEnd time:\n")
+print(end_time)
+
+cat("\nTotal elapsed time:\n")
+print(end_time - start_time)
+
+# SAVE RESULTS ---------------------------------------------------------------------
+
+dir.create(
+  here("results", "power_analysis"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+saveRDS(
+  model_place_delivery,
+  here(
+    "results",
+    "power_analysis",
+    "model_place_delivery_MAIN.rds"
+  )
+)
+
+saveRDS(
+  power_place_delivery_100,
+  here(
+    "results",
+    "power_analysis",
+    "power_place_delivery_nsim100.rds"
+  )
+)
+
+capture.output(
+  summary(model_place_delivery),
+  file = here(
+    "results",
+    "power_analysis",
+    "model_place_delivery_MAIN_summary.txt"
+  )
+)
+
+capture.output(
+  power_place_delivery_100,
+  file = here(
+    "results",
+    "power_analysis",
+    "power_place_delivery_nsim100.txt"
+  )
+)
+
+writeLines(
+  c(
+    paste("Date:", Sys.time()),
+    paste("NSIM:", NSIM),
+    paste("Seed:", SEED),
+
+    paste(
+      "Coefficient tested:",
+      "timepoint_scaled:place_deliveryhome"
+    ),
+
+    paste(
+      "Observed effect:",
+      fixef(model_place_delivery)[
+        "timepoint_scaled:place_deliveryhome"
+      ]
+    ),
+
+    paste(
+      "Observations:",
+      nobs(model_place_delivery)
+    ),
+
+    paste(
+      "vOTUs:",
+      nlevels(model.frame(model_place_delivery)$vOTUs)
+    ),
+
+    paste(
+      "Subjects:",
+      nlevels(model.frame(model_place_delivery)$subject)
+    ),
+
+    paste(
+      "Singular fit:",
+      isSingular(model_place_delivery)
+    ),
+
+    paste(
+      "Model fitting elapsed seconds:",
+      fit_time[["elapsed"]]
+    ),
+
+    paste("Start:", start_time),
+    paste("End:", end_time),
+    paste("Elapsed:", end_time - start_time)
+  ),
+
+  here(
+    "results",
+    "power_analysis",
+    "power_place_delivery_nsim100_metadata.txt"
+  )
+)
+
+cat("\nResults saved successfully.\n")
+````
+
+
+```{r}
+# ============================================================
+# SIMULATION-BASED POWER ANALYSIS
+# INTRAPARTUM ANTIBIOTICS - vOTU PRESENCE
+# MAIN RANDOM-SLOPE MODEL
+# 100 MONTE CARLO SIMULATIONS
+# ============================================================
+
+library(here)
+library(readr)
+library(dplyr)
+library(lme4)
+library(simr)
+
+cat("\n========================================\n")
+cat("POWER ANALYSIS - INTRAPARTUM ANTIBIOTICS\n")
+cat("MAIN RANDOM-SLOPE MODEL\n")
+cat("100 SIMULATIONS\n")
+cat("========================================\n\n")
+
+# LOAD DATA ------------------------------------------------------------
+
+df <- read_csv(
+  here("data", "results_with_metadata2.csv"),
+  show_col_types = FALSE
+)
+
+# BUILD FULL INFANT vOTU DATASET ---------------------------------------
+
+df_votu <- df %>%
+  filter(
+    mother_infant == "infant",
+    bodysite == "stool"
+  ) %>%
+  mutate(
+    presence = if_else(CPM > 0, 1L, 0L),
+
+    subject = factor(subject),
+    vOTUs = factor(vOTUs),
+
+    timepoint_months = as.numeric(timepoint_months),
+    timepoint_scaled = as.numeric(
+      scale(
+        timepoint_months,
+        center = TRUE,
+        scale = TRUE
+      )
+    ),
+
+    intrapartum_ATB = factor(intrapartum_ATB)
+  )
+
+cat("Observations:", nrow(df_votu), "\n")
+cat("vOTUs:", nlevels(df_votu$vOTUs), "\n")
+cat("Subjects:", nlevels(df_votu$subject), "\n\n")
+
+cat("ATB levels:\n")
+print(levels(df_votu$intrapartum_ATB))
+
+cat("\nNumber of subjects by ATB exposure:\n")
+
+print(
+  df_votu %>%
+    select(subject, intrapartum_ATB) %>%
+    distinct() %>%
+    count(intrapartum_ATB)
+)
+
+# FIT EXACT MAIN ATB MODEL -----------------------------------------------
+
+cat("\n========================================\n")
+cat("FITTING MAIN ATB MODEL\n")
+cat("========================================\n\n")
+
+fit_time <- system.time({
+
+  model_ATB_scaled <- glmer(
+    presence ~ timepoint_scaled * intrapartum_ATB +
+      (1 + timepoint_scaled | subject) +
+      (1 | vOTUs),
+    data = df_votu,
+    family = binomial,
+    control = glmerControl(
+      optimizer = "bobyqa",
+      optCtrl = list(maxfun = 2e5)
+    )
+  )
+
+})
+
+cat("\nModel fitted.\n")
+print(fit_time)
+
+cat("\nFixed effects:\n")
+print(fixef(model_ATB_scaled))
+
+cat("\nCoefficient names:\n")
+print(names(fixef(model_ATB_scaled)))
+
+cat("\nRandom effects:\n")
+print(VarCorr(model_ATB_scaled))
+
+cat("\nSingular fit:\n")
+print(isSingular(model_ATB_scaled))
+
+cat("\nConvergence messages:\n")
+print(model_ATB_scaled@optinfo$conv$lme4$messages)
+
+
+# SETTINGS ------------------------------------------------------------
+
+NSIM <- 100
+SEED <- 97531
+
+# POWER ANALYSIS -----------------------------------------------------
+#
+# AGE x INTRAPARTUM ANTIBIOTIC EXPOSURE
+#
+# Tested coefficient:
+# timepoint_scaled:intrapartum_ATB1
+
+cat("\n========================================\n")
+cat("STARTING 100 SIMULATIONS\n")
+cat("Effect: timepoint_scaled:intrapartum_ATB1\n")
+cat("========================================\n\n")
+
+start_time <- Sys.time()
+
+power_ATB_randomslope_100 <- powerSim(
+  model_ATB_scaled,
+  test = fixed(
+    "timepoint_scaled:intrapartum_ATB1",
+    method = "z"
+  ),
+  nsim = NSIM,
+  alpha = 0.05,
+  seed = SEED
+)
+
+end_time <- Sys.time()
+
+# RESULTS ---------------------------------------------------------------
+
+cat("\n========================================\n")
+cat("POWER ANALYSIS FINISHED\n")
+cat("========================================\n\n")
+
+print(power_ATB_randomslope_100)
+
+cat("\nStart time:\n")
+print(start_time)
+
+cat("\nEnd time:\n")
+print(end_time)
+
+cat("\nTotal elapsed time:\n")
+print(end_time - start_time)
+
+# SAVE MODEL AND RESULTS --------------------------------------------------
+
+dir.create(
+  here("results", "power_analysis"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+saveRDS(
+  model_ATB_scaled,
+  here(
+    "results",
+    "power_analysis",
+    "model_ATB_scaled_MAIN.rds"
+  )
+)
+
+saveRDS(
+  power_ATB_randomslope_100,
+  here(
+    "results",
+    "power_analysis",
+    "power_ATB_randomslope_nsim100.rds"
+  )
+)
+
+capture.output(
+  summary(model_ATB_scaled),
+  file = here(
+    "results",
+    "power_analysis",
+    "model_ATB_scaled_MAIN_summary.txt"
+  )
+)
+
+capture.output(
+  power_ATB_randomslope_100,
+  file = here(
+    "results",
+    "power_analysis",
+    "power_ATB_randomslope_nsim100.txt"
+  )
+)
+
+writeLines(
+  c(
+    paste("Date:", Sys.time()),
+    paste("NSIM:", NSIM),
+    paste("Seed:", SEED),
+
+    paste(
+      "Coefficient tested:",
+      "timepoint_scaled:intrapartum_ATB1"
+    ),
+
+    paste(
+      "Observed effect:",
+      fixef(model_ATB_scaled)[
+        "timepoint_scaled:intrapartum_ATB1"
+      ]
+    ),
+
+    paste(
+      "Observations:",
+      nobs(model_ATB_scaled)
+    ),
+
+    paste(
+      "vOTUs:",
+      nlevels(model.frame(model_ATB_scaled)$vOTUs)
+    ),
+
+    paste(
+      "Subjects:",
+      nlevels(model.frame(model_ATB_scaled)$subject)
+    ),
+
+    paste(
+      "Singular fit:",
+      isSingular(model_ATB_scaled)
+    ),
+
+    paste(
+      "Model fitting elapsed seconds:",
+      fit_time[["elapsed"]]
+    ),
+
+    paste("Start:", start_time),
+    paste("End:", end_time),
+    paste("Elapsed:", end_time - start_time)
+  ),
+
+  here(
+    "results",
+    "power_analysis",
+    "power_ATB_randomslope_nsim100_metadata.txt"
+  )
+)
+
+cat("\nResults saved successfully.\n")
+```
