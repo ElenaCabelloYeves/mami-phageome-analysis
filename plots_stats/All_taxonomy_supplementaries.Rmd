@@ -3,7 +3,7 @@ title: "Taxonomy"
 output: html_document
 date: "2025-12-23"
 ---
-## THIS IS THE TAXONOMY FOR ALL!!!
+## Supplemental figures are included here
 
 ```{r}
 ## PHAGES
