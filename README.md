@@ -6,7 +6,7 @@ This repository contains the analysis workflow used to reconstruct and analyze t
 
 The code accompanies the manuscript:
 
-"Early-life dynamics of the infant gut phageome are associated with breastfeeding and maternal contributions"
+"Breastfeeding and maternal microbial reservoirs are associated with infant gut phageome development during the first year of life"
 
 Figure generation and statistical analyses are located in the plots_stats/ directory.
 
